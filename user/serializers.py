@@ -5,10 +5,25 @@ from rest_framework.authtoken.models import Token
 User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
+    avatar = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = ['id', 'email', 'username', 'avatar', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_avatar(self, obj):
+        if obj.avatar and hasattr(obj.avatar, 'url'):
+            try:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.avatar.url)
+                # Return full URL even without request
+                from django.conf import settings
+                return f"{settings.MEDIA_URL}{obj.avatar}"
+            except Exception:
+                pass
+        return None
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})

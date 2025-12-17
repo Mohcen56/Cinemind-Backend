@@ -23,7 +23,7 @@ def register(request):
             'success': True,
             'message': 'Registration successful',
             'token': token.key,
-            'user': UserSerializer(user).data
+            'user': UserSerializer(user, context={'request': request}).data
         }, status=status.HTTP_201_CREATED)
     
     return Response({
@@ -47,31 +47,25 @@ def login(request):
     email = serializer.validated_data['email']
     password = serializer.validated_data['password']
     
-    try:
-        user = User.objects.get(email=email)
-        user = authenticate(username=user.username, password=password)
-        
-        if user is None:
-            return Response({
-                'success': False,
-                'error': 'Invalid credentials'
-            }, status=status.HTTP_401_UNAUTHORIZED)
-        
-        # Get or create token
-        token, created = Token.objects.get_or_create(user=user)
-        
-        return Response({
-            'success': True,
-            'message': 'Login successful',
-            'token': token.key,
-            'user': UserSerializer(user).data
-        }, status=status.HTTP_200_OK)
-        
-    except User.DoesNotExist:
+    # Since USERNAME_FIELD is set to 'email' in the User model,
+    # we need to authenticate using email, not username
+    user = authenticate(username=email, password=password)
+    
+    if user is None:
         return Response({
             'success': False,
             'error': 'Invalid credentials'
         }, status=status.HTTP_401_UNAUTHORIZED)
+    
+    # Get or create token
+    token, created = Token.objects.get_or_create(user=user)
+    
+    return Response({
+        'success': True,
+        'message': 'Login successful',
+        'token': token.key,
+        'user': UserSerializer(user, context={'request': request}).data
+    }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -100,7 +94,7 @@ def get_profile(request):
     user = request.user
     return Response({
         'success': True,
-        'user': UserSerializer(user).data
+        'user': UserSerializer(user, context={'request': request}).data
     }, status=status.HTTP_200_OK)
 
 @api_view(['PUT', 'PATCH'])
@@ -110,7 +104,7 @@ def update_profile(request):
     Update user profile
     """
     user = request.user
-    serializer = UserSerializer(user, data=request.data, partial=True)
+    serializer = UserSerializer(user, data=request.data, partial=True, context={'request': request})
     
     if serializer.is_valid():
         serializer.save()
