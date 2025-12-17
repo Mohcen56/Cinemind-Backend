@@ -156,3 +156,94 @@ def change_password(request):
         'token': token.key
     }, status=status.HTTP_200_OK)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def toggle_movie_like(request, movie_id):
+    """
+    Toggle like status for a movie
+    """
+    from .models import MovieInteraction
+    
+    interaction, created = MovieInteraction.objects.get_or_create(
+        user=request.user,
+        movie_id=movie_id,
+        defaults={'is_liked': True}
+    )
+    
+    if not created:
+        interaction.is_liked = not interaction.is_liked
+        interaction.save()
+    
+    return Response({
+        'success': True,
+        'is_liked': interaction.is_liked,
+        'message': 'Movie liked' if interaction.is_liked else 'Movie unliked'
+    }, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def toggle_movie_save(request, movie_id):
+    """
+    Toggle save status for a movie
+    """
+    from .models import MovieInteraction
+    
+    interaction, created = MovieInteraction.objects.get_or_create(
+        user=request.user,
+        movie_id=movie_id,
+        defaults={'is_saved': True}
+    )
+    
+    if not created:
+        interaction.is_saved = not interaction.is_saved
+        interaction.save()
+    
+    return Response({
+        'success': True,
+        'is_saved': interaction.is_saved,
+        'message': 'Movie saved' if interaction.is_saved else 'Movie unsaved'
+    }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_movie_interaction(request, movie_id):
+    """
+    Get user's interaction status for a specific movie
+    """
+    from .models import MovieInteraction
+    
+    try:
+        interaction = MovieInteraction.objects.get(user=request.user, movie_id=movie_id)
+        return Response({
+            'success': True,
+            'is_liked': interaction.is_liked,
+            'is_saved': interaction.is_saved
+        }, status=status.HTTP_200_OK)
+    except MovieInteraction.DoesNotExist:
+        return Response({
+            'success': True,
+            'is_liked': False,
+            'is_saved': False
+        }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_saved_movies(request):
+    """
+    Get all saved movies for the authenticated user
+    """
+    from .models import MovieInteraction
+    
+    saved_interactions = MovieInteraction.objects.filter(
+        user=request.user,
+        is_saved=True
+    ).order_by('-updated_at')
+    
+    saved_movie_ids = [interaction.movie_id for interaction in saved_interactions]
+    
+    return Response({
+        'success': True,
+        'movie_ids': saved_movie_ids,
+        'count': len(saved_movie_ids)
+    }, status=status.HTTP_200_OK)
+
