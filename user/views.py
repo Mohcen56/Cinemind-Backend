@@ -158,26 +158,48 @@ def change_password(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def toggle_movie_like(request, movie_id):
+def rate_movie(request, movie_id):
     """
-    Toggle like status for a movie
+    Set or update user's rating for a movie (0-5 with 0.5 increments)
     """
     from .models import MovieInteraction
+    from decimal import Decimal
+    
+    rating_value = request.data.get('rating')
+    
+    if rating_value is None:
+        return Response({
+            'success': False,
+            'error': 'Rating value is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        rating_value = Decimal(str(rating_value))
+        if rating_value < 0 or rating_value > 5:
+            raise ValueError("Rating must be between 0 and 5")
+        # Ensure it's a multiple of 0.5
+        if float(rating_value) % 0.5 != 0:
+            raise ValueError("Rating must be in 0.5 increments")
+    except (ValueError, Exception) as e:
+        return Response({
+            'success': False,
+            'error': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
     
     interaction, created = MovieInteraction.objects.get_or_create(
         user=request.user,
         movie_id=movie_id,
-        defaults={'is_liked': True}
+        defaults={'rating': rating_value}
     )
     
     if not created:
-        interaction.is_liked = not interaction.is_liked
+        interaction.rating = rating_value
         interaction.save()
     
     return Response({
         'success': True,
-        'is_liked': interaction.is_liked,
-        'message': 'Movie liked' if interaction.is_liked else 'Movie unliked'
+        'rating': float(interaction.rating) if interaction.rating else None,
+        'message': 'Movie rated successfully'
     }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
@@ -216,13 +238,13 @@ def get_movie_interaction(request, movie_id):
         interaction = MovieInteraction.objects.get(user=request.user, movie_id=movie_id)
         return Response({
             'success': True,
-            'is_liked': interaction.is_liked,
+            'rating': float(interaction.rating) if interaction.rating else None,
             'is_saved': interaction.is_saved
         }, status=status.HTTP_200_OK)
     except MovieInteraction.DoesNotExist:
         return Response({
             'success': True,
-            'is_liked': False,
+            'rating': None,
             'is_saved': False
         }, status=status.HTTP_200_OK)
 
