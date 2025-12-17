@@ -31,8 +31,8 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(MovieInteraction)
 class MovieInteractionAdmin(admin.ModelAdmin):
-    list_display = ['user', 'movie_id', 'is_liked', 'is_saved', 'created_at', 'updated_at']
-    list_filter = ['is_liked', 'is_saved', 'created_at']
+    list_display = ['user', 'movie_id', 'rating', 'is_saved', 'created_at', 'updated_at']
+    list_filter = ['rating', 'is_saved', 'created_at']
     search_fields = ['user__email', 'user__username', 'movie_id']
     ordering = ['-updated_at']
     readonly_fields = ['created_at', 'updated_at']
