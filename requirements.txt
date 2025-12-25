@@ -1,0 +1,23 @@
+# Django and core dependencies
+Django>=5.1.3
+python-decouple>=3.8
+dj-database-url>=2.1.0
+
+# Database
+psycopg2-binary>=2.9.9
+
+# API & CORS
+djangorestframework>=3.14.0
+django-cors-headers>=4.3.1
+
+# Production server
+gunicorn>=21.2.0
+whitenoise>=6.6.0
+
+# AI/ML providers (based on your existing code)
+google-generativeai
+groq
+openai>=1.12.0  # For GitHub Models API
+
+# HTTP requests (for TMDB API)
+requests>=2.31.0
