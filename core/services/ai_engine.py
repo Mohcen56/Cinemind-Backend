@@ -34,6 +34,8 @@ def get_movie_title(movie_id: int):
 def get_weighted_user_profile(user):
     # 1. Fetch all interactions for this user
     interactions = MovieInteraction.objects.filter(user=user)
+    total_interactions = interactions.count()
+    print(f"[ai_engine] get_weighted_user_profile for user {user.username}: {total_interactions} total interactions")
 
     # 2. Create buckets for our "Weighted Logic"
     loved = []   # Rating 5
@@ -48,12 +50,16 @@ def get_weighted_user_profile(user):
             continue
         if item.rating and item.rating <= 2:
             hated.append(title)
+            print(f"[ai_engine]   HATED: {title} (rating {item.rating})")
         elif item.rating == 5:
             loved.append(title)
+            print(f"[ai_engine]   LOVED: {title}")
         elif item.is_saved:
             saved.append(title)
+            print(f"[ai_engine]   SAVED: {title}")
         elif item.rating and item.rating >= 3:
             liked.append(title)
+            print(f"[ai_engine]   LIKED: {title} (rating {item.rating})")
 
     # 4. Construct the text for the AI (dedupe and tidy)
     def unique(seq):
@@ -66,6 +72,8 @@ def get_weighted_user_profile(user):
         return out
 
     loved = unique(loved)
+
+    print(f"[ai_engine] After dedup: LOVED={len(loved)}, SAVED={len(saved)}, LIKED={len(liked)}, HATED={len(hated)}")
     saved = unique(saved)
     liked = unique(liked)
     hated = unique(hated)
