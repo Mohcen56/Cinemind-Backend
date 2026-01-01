@@ -37,46 +37,48 @@ def get_weighted_user_profile(user):
     total_interactions = interactions.count()
     print(f"[ai_engine] get_weighted_user_profile for user {user.username}: {total_interactions} total interactions")
 
-    # 2. Create buckets for our "Weighted Logic"
-    loved = []   # Rating 5
-    saved = []   # Watchlist (Weight 4)
+    # 2. Create buckets with priority hierarchy (highest to lowest)
+    loved = []   # Rating 5 (highest priority)
+    saved = []   # Watchlist without high rating
     liked = []   # Rating 3-4
-    hated = []   # Rating 1-2 (Block list)
+    hated = []   # Rating 1-2 (avoid these patterns)
 
-    # 3. Sort movies into buckets (skip missing titles)
+    # 3. Sort movies into buckets with priority handling (skip missing titles)
+    # Priority: HATED > LOVED > SAVED > LIKED (avoid duplicates across buckets)
+    loved_set = set()
+    saved_set = set()
+    liked_set = set()
+    hated_set = set()
+    
     for item in interactions:
         title = get_movie_title(item.movie_id)
         if not title:
             continue
+        
+        # Priority 1: HATED (rating 1-2) - strongest signal to avoid
         if item.rating and item.rating <= 2:
-            hated.append(title)
+            hated_set.add(title)
             print(f"[ai_engine]   HATED: {title} (rating {item.rating})")
+        # Priority 2: LOVED (rating 5) - even if also saved
         elif item.rating == 5:
-            loved.append(title)
+            loved_set.add(title)
             print(f"[ai_engine]   LOVED: {title}")
+        # Priority 3: SAVED (watchlist without rating 5)
         elif item.is_saved:
-            saved.append(title)
+            saved_set.add(title)
             print(f"[ai_engine]   SAVED: {title}")
+        # Priority 4: LIKED (rating 3-4)
         elif item.rating and item.rating >= 3:
-            liked.append(title)
+            liked_set.add(title)
             print(f"[ai_engine]   LIKED: {title} (rating {item.rating})")
 
-    # 4. Construct the text for the AI (dedupe and tidy)
-    def unique(seq):
-        seen = set()
-        out = []
-        for s in seq:
-            if s not in seen:
-                seen.add(s)
-                out.append(s)
-        return out
-
-    loved = unique(loved)
-
-    print(f"[ai_engine] After dedup: LOVED={len(loved)}, SAVED={len(saved)}, LIKED={len(liked)}, HATED={len(hated)}")
-    saved = unique(saved)
-    liked = unique(liked)
-    hated = unique(hated)
+    # 4. Convert sets to lists for consistent ordering
+    loved = sorted(loved_set)
+    saved = sorted(saved_set)
+    liked = sorted(liked_set)
+    hated = sorted(hated_set)
+    
+    print(f"[ai_engine] Final counts: LOVED={len(loved)}, SAVED={len(saved)}, LIKED={len(liked)}, HATED={len(hated)}")
 
     profile_text = "User's Taste Profile:\n"
     if loved:
