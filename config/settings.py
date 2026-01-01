@@ -18,7 +18,7 @@ from decouple import config
 
 
 TMDB_API_KEY = config("TMDB_API_KEY")
-GEMINI_API_KEY = config("GEMINI_API_KEY", default="")
+
 GROQ_API_KEY = config("GROQ_API_KEY", default="")
 GITHUB_API_KEY = config("GITHUB_API_KEY", default="")
 

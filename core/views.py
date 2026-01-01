@@ -97,7 +97,7 @@ def trending(request):
     
     return Response(data)
 
-# Gemini removed; using Groq (fast) and GitHub Models (smart)
+#using Groq (fast) and GitHub Models (smart)
 
 class AIChatView(APIView):
     def post(self, request):
@@ -148,6 +148,10 @@ class AIChatView(APIView):
             "similar to what i like", "match my", "prefer"
         ]
         needs_personalization = any(kw in user_query_lower for kw in personalization_keywords)
+        
+        # Detect saved/watchlist requests and extract genre keyword
+        watchlist_request = any(k in user_query_lower for k in ["saved", "watchlist"])
+        watchlist_keyword = next((k for k in genre_map if k in user_query_lower), None)
 
         # 4. Build user's taste profile and saved watchlist for ALL authenticated users
         user_profile = ""
@@ -209,6 +213,74 @@ class AIChatView(APIView):
         else:
             print(f"[AIChatView] No profile included (user has no interactions or not authenticated)")
 
+        # Handle saved/watchlist requests with genre filtering
+        if watchlist_request:
+            if saved_watchlist:
+                # Filter by genre if keyword detected
+                filtered_saved = saved_watchlist
+                if watchlist_keyword and watchlist_keyword in genre_map:
+                    genre_id = genre_map[watchlist_keyword]["genre_id"]
+                    required_language = genre_map[watchlist_keyword].get("language")
+                    filtered_saved = []
+                    for m in saved_watchlist:
+                        movie_genres = self.get_movie_genres(m["id"])
+                        if genre_id not in movie_genres:
+                            continue
+                        # If language required (e.g., anime needs Japanese), check it too
+                        if required_language:
+                            movie_language = self.get_movie_language(m["id"])
+                            if movie_language != required_language:
+                                continue
+                        filtered_saved.append(m)
+                
+                if filtered_saved:
+                    # Return filtered saved movies
+                    saved_movies_details = []
+                    for m in filtered_saved[:10]:
+                        tmdb_data = self.fetch_tmdb_details(m["title"])
+                        if tmdb_data:
+                            saved_movies_details.append(tmdb_data)
+                    
+                    return Response({
+                        "response_text": "Here are picks from your saved list.",
+                        "movies": saved_movies_details,
+                        "provider": "rule-based",
+                        "model": "saved-filtered"
+                    })
+                else:
+                    # No matches for this genre in saved list
+                    fallback_movies = []
+                    genre_label = watchlist_keyword if watchlist_keyword else ""
+                    if watchlist_keyword and watchlist_keyword in genre_map:
+                        cfg = genre_map[watchlist_keyword]
+                        fallback_movies = self.get_top_rated_by_genre(cfg.get("genre_id"), cfg.get("language")) or []
+                    else:
+                        fallback_movies = self.get_top_rated_movies() or []
+                    
+                    # Filter out already rated movies (user has watched them)
+                    filtered_fallback = [m for m in fallback_movies if m.get("id") not in rated_exclusion_ids]
+                    
+                    message = f"You don't have any {genre_label} movies saved, but here are some you may like:" if genre_label else "You haven't saved any movies that match your request, but here are some you may like:"
+                    
+                    return Response({
+                        "response_text": message,
+                        "movies": filtered_fallback[:5],
+                        "provider": "rule-based",
+                        "model": "saved-fallback"
+                    })
+            else:
+                # No saved movies at all
+                fallback_movies = self.get_top_rated_movies() or []
+                # Filter out already rated movies
+                filtered_fallback = [m for m in fallback_movies if m.get("id") not in rated_exclusion_ids]
+                
+                return Response({
+                    "response_text": "You haven't saved any movies yet, but here are some you may like:",
+                    "movies": filtered_fallback[:5],
+                    "provider": "rule-based",
+                    "model": "saved-empty"
+                })
+        
         watchlist_section = ""
         if saved_watchlist:
             formatted = "\n".join([f"- {m['title']} (id: {m['id']})" for m in saved_watchlist[:20]])
@@ -392,6 +464,40 @@ User Request: "{user_query}"
             "model": model_used
         })
 
+    def get_movie_genres(self, movie_id):
+        """Get genre IDs for a movie from TMDB"""
+        headers = {
+            "Authorization": f"Bearer {settings.TMDB_API_KEY}",
+            "accept": "application/json",
+        }
+        url = f"https://api.themoviedb.org/3/movie/{movie_id}"
+        
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            return [g["id"] for g in data.get("genres", [])]
+        except Exception as e:
+            print(f"[AIChatView.get_movie_genres] error: {e}")
+            return []
+
+    def get_movie_language(self, movie_id):
+        """Get original language for a movie from TMDB (e.g., 'ja' for Japanese)"""
+        headers = {
+            "Authorization": f"Bearer {settings.TMDB_API_KEY}",
+            "accept": "application/json",
+        }
+        url = f"https://api.themoviedb.org/3/movie/{movie_id}"
+        
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("original_language", "")
+        except Exception as e:
+            print(f"[AIChatView.get_movie_language] error: {e}")
+            return ""
+
     def fetch_tmdb_details(self, title):
         """Fetch movie details from TMDB using Bearer token to get poster and ID"""
         headers = {
@@ -442,7 +548,7 @@ User Request: "{user_query}"
             data = resp.json()
             
             results = []
-            for movie in data.get('results', [])[:5]:
+            for movie in data.get('results', [])[:20]:  # Fetch 20 to ensure 5 unrated after filtering
                 results.append({
                     "id": movie.get('id'),
                     "title": movie.get('title'),
@@ -474,7 +580,7 @@ User Request: "{user_query}"
             data = resp.json()
             
             results = []
-            for movie in data.get('results', [])[:5]:
+            for movie in data.get('results', [])[:20]:  # Fetch 20 to ensure 5 unrated after filtering
                 results.append({
                     "id": movie.get('id'),
                     "title": movie.get('title'),
