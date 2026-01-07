@@ -101,10 +101,35 @@ def trending(request):
 
 class AIChatView(APIView):
     def post(self, request):
-        # 1. Get the user's message from the frontend
+        # 1. Get the user's message and conversation history from the frontend
         user_query = request.data.get('message')
+        conversation_history = request.data.get('history', [])  # List of {role, content, movies}
+        
         if not user_query or not str(user_query).strip():
             return Response({"error": "Missing 'message' in request body"}, status=400)
+
+        # Build conversation context from history
+        history_context = ""
+        last_recommended_movies = []  # Track last recommendations for explanation requests
+        if conversation_history:
+            history_lines = []
+            for msg in conversation_history[-6:]:  # Last 6 messages for context
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                movies = msg.get('movies', [])
+                if role == 'user':
+                    history_lines.append(f"User: {content}")
+                else:
+                    movie_titles = [m.get('title', '') for m in movies] if movies else []
+                    if movie_titles:
+                        last_recommended_movies = movie_titles  # Track for explanations
+                        history_lines.append(f"Assistant: {content}")
+                        history_lines.append(f"   >> MOVIES RECOMMENDED: {', '.join(movie_titles)}")
+                    else:
+                        history_lines.append(f"Assistant: {content}")
+            history_context = "\n".join(history_lines)
+            print(f"[AIChatView] History context built: {history_context[:200]}...")
+            print(f"[AIChatView] Last recommended movies: {last_recommended_movies}")
 
         # 2. Check if asking for "best/top" movies - should use TMDB data
         best_query_keywords = ["best", "top", "highest rated", "most popular", "top rated", "highest scoring"]
@@ -148,6 +173,24 @@ class AIChatView(APIView):
             "similar to what i like", "match my", "prefer"
         ]
         needs_personalization = any(kw in user_query_lower for kw in personalization_keywords)
+        
+        # Also detect general discovery requests (need TMDB suggestions)
+        discovery_keywords = [
+            "get me", "find me", "something to watch", "movie to watch",
+            "what to watch", "show me", "give me", "i want to watch"
+        ]
+        is_discovery = any(kw in user_query_lower for kw in discovery_keywords) or needs_personalization
+        
+        # ALWAYS fetch TMDB top movies for discovery/recommendation requests
+        if is_discovery and not tmdb_top_movies:
+            # Check for genre-specific discovery
+            for keyword, config in genre_map.items():
+                if keyword in user_query_lower:
+                    detected_genre = keyword
+                    tmdb_top_movies = self.get_top_rated_by_genre(config.get("genre_id"), config.get("language"))
+                    break
+            if not detected_genre:
+                tmdb_top_movies = self.get_top_rated_movies()
         
         # Detect saved/watchlist requests and extract genre keyword
         watchlist_request = any(k in user_query_lower for k in ["saved", "watchlist"])
@@ -285,16 +328,24 @@ class AIChatView(APIView):
         if saved_watchlist:
             formatted = "\n".join([f"- {m['title']} (id: {m['id']})" for m in saved_watchlist[:20]])
             watchlist_section = (
-                "\nUser Saved/Watchlist movies (pick from here if user mentions saved/watchlist/later):\n"
+                "\nUser Saved/Watchlist movies (MAX 2 from here for discovery requests, rest must be new):\n"
                 f"{formatted}\n"
             )
         
         # Add TMDB data context if we found top-rated movies
         tmdb_context = ""
         if tmdb_top_movies:
-            tmdb_list = "\n".join([f"- {m['title']} ({m.get('year', 'N/A')}) - Rating: {m.get('vote_average', 'N/A')}/10" for m in tmdb_top_movies])
-            heading = detected_genre.title() if detected_genre else "All Genres"
-            tmdb_context = f"\n\nTMDB Top-Rated {heading} Movies (by user scores):\n{tmdb_list}\n\nIMPORTANT: Prioritize these movies in your recommendations. These are sorted by actual user ratings."
+            tmdb_list = "\n".join([f"- {m['title']} ({m.get('vote_average', 'N/A')}/10)" for m in tmdb_top_movies])
+            heading = detected_genre.title() if detected_genre else "Popular"
+            tmdb_context = f"\n\nTMDB {heading} Movies (PICK FROM THIS LIST for new discoveries):\n{tmdb_list}\n\nCRITICAL: For new recommendations, you MUST pick movies from this TMDB list above. These titles are verified to exist."
+
+        # Build conversation history section
+        history_section = ""
+        last_movies_section = ""
+        if history_context:
+            history_section = f"\n\n### CONVERSATION HISTORY (use this for context):\n{history_context}\n"
+        if last_recommended_movies:
+            last_movies_section = f"\n\n### YOUR LAST RECOMMENDATIONS (reference these when asked 'why'):\n{', '.join(last_recommended_movies)}\n"
 
         # 5. Validate that at least one provider is configured
         if not (getattr(settings, 'GROQ_API_KEY', None) or getattr(settings, 'GITHUB_API_KEY', None)):
@@ -312,7 +363,8 @@ class AIChatView(APIView):
         prompt = f"""
 ### ROLE & OBJECTIVE
 You are CineMind, a friendly but concise movie expert AI. Your goal is to understand user intent and provide movie data strictly in JSON format.
-
+You have memory of the conversation and can reference previous recommendations.
+{history_section}{last_movies_section}
 ### INPUT DATA CONTEXT
 {profile_section}
 {watchlist_section}
@@ -332,24 +384,34 @@ Analyze the user's request "{user_query}" and strictly follow the matching rule:
     - DATA SOURCE: Watchlist above ONLY.
    - CONSTRAINT: Do NOT add new movies. If list is empty, say so in response_text.
 
-3. DISCOVERY / SUGGESTIONS (e.g., "Suggest something new", "Movies like my saved ones", "Comedy movies")
-    - ACTION: Generate 5 NEW recommendations based on user taste and TMDB data.
-    - DATA SOURCE: Use "User Taste Profile" if available. If not provided, use {tmdb_context} + general knowledge.
-    - KEY RULE: When User Taste Profile exists, PRIORITIZE movies similar to their LOVES/LIKES categories. Avoid their HATES.
+3. DISCOVERY / SUGGESTIONS (e.g., "Suggest something new", "Movies like my saved ones", "Comedy movies", "get me something to watch")
+    - ACTION: Generate EXACTLY 5 recommendations based on user taste and TMDB data.
+    - DATA SOURCE: MUST use the "TMDB Movies" list provided above. Pick titles EXACTLY as they appear in that list.
+    - KEY RULE: When User Taste Profile exists, pick movies from TMDB list that match their LOVES/LIKES categories. Avoid their HATES.
+    - WATCHLIST LIMIT: Include AT MOST 2 movies from the user's watchlist. The remaining 3+ MUST be from the TMDB list above.
+    - MANDATORY: You MUST return exactly 5 movie recommendations. Never return fewer than 5.
     - CONSTRAINTS:
-         * Do NOT include any movie already present in the watchlist above more than once.
-         * Do NOT recommend any movie listed in "Rated movies" above (use them only as preference signals). Saved/watchlist items are okay.
+         * Maximum 2 movies from watchlist - remaining 3+ MUST come from the TMDB list provided.
+         * Copy movie titles EXACTLY as shown in the TMDB list (spelling matters for lookup).
+         * Do NOT recommend any movie listed in "Rated movies" above.
 
 4. SPECIFIC MOVIE INFO (e.g., "Who directed Inception?", "Rating of The Godfather")
    - ACTION: Answer the specific question.
    - RECOMMENDATIONS: Return an empty list [] unless explicitly asked "and suggest similar ones."
+
+5. EXPLANATION REQUEST (e.g., "why", "why this movie?", "why did you choose", "explain", "specify", "reason")
+   - ACTION: Explain why EACH of the movies listed in "YOUR LAST RECOMMENDATIONS" was chosen.
+   - DATA SOURCE: Look at "YOUR LAST RECOMMENDATIONS" section above for the movie names.
+   - EXPLANATION FORMAT: For EACH movie, explain why it matches the User Taste Profile (their LOVES/LIKES). Be specific: "Movie X was chosen because you love [genre] and it features [specific element]."
+   - RESPONSE MUST: Name each movie explicitly and give a unique reason for each one.
+   - RECOMMENDATIONS: Return an empty list [].
 
 ### RESPONSE FORMAT (STRICT JSON)
 Output MUST be a single valid JSON object. Do not include markdown formatting (like ```json).
 
 JSON SCHEMA:
 {{
-  "response_text": "String under 160 chars. Friendly tone.",
+  "response_text": "String. Friendly tone. For explanations, name each movie and reason. Max 300 chars.",
   "recommendations": [
     {{ "title": "Exact Movie Title", "year": "YYYY" }},
     {{ "title": "Exact Movie Title", "year": "YYYY" }}
@@ -364,7 +426,16 @@ User: "Show my watchlist"
 Output: {{ "response_text": "Here are the movies you've saved so far:", "recommendations": [ {{ "title": "Dune", "year": "2021" }} ] }}
 
 User: "Recommend something new like Dune"
-Output: {{ "response_text": "If you loved Dune, you might enjoy these sci-fi epics:", "recommendations": [ {{ "title": "Blade Runner 2049", "year": "2017" }}, {{ "title": "Arrival", "year": "2016" }} ] }}
+Output: {{ "response_text": "If you loved Dune, you might enjoy these sci-fi epics:", "recommendations": [ {{ "title": "Blade Runner 2049", "year": "2017" }}, {{ "title": "Arrival", "year": "2016" }}, {{ "title": "Interstellar", "year": "2014" }}, {{ "title": "The Matrix", "year": "1999" }}, {{ "title": "Ex Machina", "year": "2014" }} ] }}
+
+User: "get me something to watch"
+Output: {{ "response_text": "Here are 5 picks based on your taste:", "recommendations": [ {{ "title": "Inception", "year": "2010" }}, {{ "title": "The Dark Knight", "year": "2008" }}, {{ "title": "Parasite", "year": "2019" }}, {{ "title": "Whiplash", "year": "2014" }}, {{ "title": "Mad Max: Fury Road", "year": "2015" }} ] }}
+
+User: "why did you choose those movies"
+Output: {{ "response_text": "I picked Inception because you love mind-bending thrillers. The Dark Knight fits your love for action. Parasite matches your interest in drama. Whiplash was chosen for its intensity. Mad Max fits your action taste!", "recommendations": [] }}
+
+User: "explain why you recommended those"
+Output: {{ "response_text": "1) Movie A - matches your love for sci-fi. 2) Movie B - fits your action preference. 3) Movie C - you enjoy thrillers. 4) Movie D - based on your drama interest. 5) Movie E - matches your comedy likes!", "recommendations": [] }}
 
 ### FINAL USER REQUEST
 User Request: "{user_query}"

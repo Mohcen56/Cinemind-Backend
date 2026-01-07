@@ -169,8 +169,8 @@ AUTH_USER_MODEL = 'user.User'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+        'user.authentication.CookieTokenAuthentication',  # HTTP-only cookie auth (XSS safe)
+        'rest_framework.authentication.TokenAuthentication',  # Fallback for API clients
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
