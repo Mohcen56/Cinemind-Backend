@@ -39,7 +39,9 @@ The **CineMind Backend** is a robust Django REST API that powers the CineMind AI
 
 - 🤖 **Multi-LLM Support** - Smart routing between Groq (speed) and GPT-4o (intelligence)
 - 🎯 **RAG Architecture** - Context-aware recommendations using user preferences
-- 🔒 **Token-Based Auth** - Secure authentication with Django REST Token Auth
+- � **Conversation Memory** - AI maintains context across chat sessions with history tracking
+- 🔒 **HTTP-Only Cookie Auth** - XSS-safe authentication with cross-origin support
+- 🚦 **Rate Limiting** - Protection against brute force attacks on all auth endpoints
 - 📊 **User Profiling** - Weighted preference system (LOVED > SAVED > LIKED > HATED)
 - 🎬 **TMDB Integration** - Real-time movie data, cast, and recommendations
 
@@ -169,7 +171,7 @@ CineMind implements a sophisticated **Retrieval-Augmented Generation** architect
 | `GET` | `/movies/` | Search/discover movies (with pagination) |
 | `GET` | `/movies/<id>/` | Get movie details with cast & recommendations |
 | `GET` | `/movies/trending/` | Get TMDB weekly trending movies |
-| `POST` | `/chat/` | AI-powered chat for recommendations |
+| `POST` | `/chat/` | AI chat with conversation history & context memory |
 | `GET` | `/search/trending/` | Get trending searches on platform |
 | `POST` | `/search/update/` | Update search trending analytics |
 
@@ -354,6 +356,8 @@ Backend/
 │   ├── models.py                # User & MovieInteraction models
 │   ├── views.py                 # Auth & profile endpoints
 │   ├── serializers.py           # DRF serializers
+│   ├── authentication.py        # 🔐 HTTP-only cookie auth
+│   ├── throttles.py             # 🚦 Rate limiting classes
 │   ├── urls.py                  # User URL patterns
 │   └── migrations/              # Database migrations
 │
@@ -365,11 +369,17 @@ Backend/
 
 ## 🛡️ Security Features
 
-- 🔐 **Token-based Authentication** - Secure API access
+- 🔐 **HTTP-Only Cookie Authentication** - XSS-safe token storage (no localStorage)
+- 🚦 **Rate Limiting** - Brute force protection on auth endpoints
+  - Login: 5 attempts/minute
+  - Register: 3 attempts/hour
+  - Password Change: 5 attempts/hour
+  - Profile Update: 20 attempts/hour
 - 🔒 **Password Validation** - Django's built-in validators
-- 🌐 **CORS Configuration** - Whitelist allowed origins
+- 🌐 **CORS Configuration** - Whitelist allowed origins with credentials support
 - 🛡️ **CSRF Protection** - Trusted origins only
 - 📝 **Environment Variables** - Secrets via python-decouple
+- 🔄 **SameSite Cookie Policy** - Lax for dev, None for production
 
 ---
 
