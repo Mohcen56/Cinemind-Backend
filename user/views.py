@@ -1,15 +1,18 @@
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate, get_user_model
 from .serializers import UserSerializer, RegisterSerializer, LoginSerializer, PasswordChangeSerializer
+from .throttles import LoginRateThrottle, RegisterRateThrottle, PasswordChangeThrottle, ProfileUpdateThrottle
+from .authentication import set_auth_cookie, clear_auth_cookie
 
 User = get_user_model()
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([RegisterRateThrottle])
 def register(request):
     """
     Register a new user account
@@ -19,12 +22,15 @@ def register(request):
         user = serializer.save()
         token = Token.objects.get(user=user)
         
-        return Response({
+        response = Response({
             'success': True,
             'message': 'Registration successful',
-            'token': token.key,
             'user': UserSerializer(user, context={'request': request}).data
         }, status=status.HTTP_201_CREATED)
+        
+        # Set HTTP-only cookie with auth token (XSS safe)
+        set_auth_cookie(response, token.key)
+        return response
     
     return Response({
         'success': False,
@@ -33,9 +39,11 @@ def register(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def login(request):
     """
-    Login user and return auth token
+    Login user and return auth token.
+    Rate limited to prevent brute force attacks.
     """
     serializer = LoginSerializer(data=request.data)
     if not serializer.is_valid():
@@ -60,25 +68,32 @@ def login(request):
     # Get or create token
     token, created = Token.objects.get_or_create(user=user)
     
-    return Response({
+    response = Response({
         'success': True,
         'message': 'Login successful',
-        'token': token.key,
         'user': UserSerializer(user, context={'request': request}).data
     }, status=status.HTTP_200_OK)
+    
+    # Set HTTP-only cookie with auth token (XSS safe)
+    set_auth_cookie(response, token.key)
+    return response
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout(request):
     """
-    Logout user by deleting auth token
+    Logout user by deleting auth token and clearing cookie
     """
     try:
         request.user.auth_token.delete()
-        return Response({
+        response = Response({
             'success': True,
             'message': 'Logout successful'
         }, status=status.HTTP_200_OK)
+        
+        # Clear the HTTP-only auth cookie
+        clear_auth_cookie(response)
+        return response
     except Exception as e:
         return Response({
             'success': False,
@@ -99,6 +114,7 @@ def get_profile(request):
 
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ProfileUpdateThrottle])
 def update_profile(request):
     """
     Update user profile
@@ -119,8 +135,55 @@ def update_profile(request):
         'error': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+@throttle_classes([ProfileUpdateThrottle])
+def update_avatar(request):
+    """
+    Update user avatar/profile picture
+    """
+    user = request.user
+    
+    if 'avatar' not in request.FILES:
+        return Response({
+            'success': False,
+            'error': 'No avatar file provided'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    avatar_file = request.FILES['avatar']
+    
+    # Validate file type
+    allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+    if avatar_file.content_type not in allowed_types:
+        return Response({
+            'success': False,
+            'error': 'Invalid file type. Allowed: JPEG, PNG, GIF, WebP'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Validate file size (max 5MB)
+    if avatar_file.size > 5 * 1024 * 1024:
+        return Response({
+            'success': False,
+            'error': 'File too large. Maximum size is 5MB'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Delete old avatar if exists
+    if user.avatar:
+        user.avatar.delete(save=False)
+    
+    user.avatar = avatar_file
+    user.save()
+    
+    return Response({
+        'success': True,
+        'message': 'Avatar updated successfully',
+        'avatar_url': request.build_absolute_uri(user.avatar.url) if user.avatar else None,
+        'user': UserSerializer(user, context={'request': request}).data
+    }, status=status.HTTP_200_OK)
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([PasswordChangeThrottle])
 def change_password(request):
     """
     Change user password
