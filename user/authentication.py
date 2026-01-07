@@ -54,13 +54,15 @@ def set_auth_cookie(response, token, max_age=7*24*60*60):
     """
     is_production = not settings.DEBUG
     
+    # Production (cross-origin, HTTPS): SameSite=None with Secure=True
+    # Development (same domain, HTTP): SameSite=Lax with Secure=False
     response.set_cookie(
         key='authToken',
         value=token,
         max_age=max_age,
         httponly=True,  # Cannot be accessed by JavaScript - XSS protection
-        secure=is_production,  # HTTPS only in production
-        samesite='Lax',  # CSRF protection
+        secure=is_production,  # True in production (requires HTTPS)
+        samesite='None' if is_production else 'Lax',  # None for cross-origin, Lax for same-domain
         path='/',
     )
     return response
@@ -73,9 +75,11 @@ def clear_auth_cookie(response):
     Args:
         response: Django Response object
     """
+    is_production = not settings.DEBUG
+    
     response.delete_cookie(
         key='authToken',
         path='/',
-        samesite='Lax',
+        samesite='None' if is_production else 'Lax',
     )
     return response
