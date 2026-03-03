@@ -410,8 +410,8 @@ curl -X POST http://localhost:8000/api/user/login/ \
 
 <div align="center">
   
-  **Built with ❤️ using Django & AI**
+  **Built with ❤️ using Django**
   
-  [🎬 Frontend](../Frontend) • [📖 Deployment Guide](./DEPLOYMENT.md)
+  [🎬 Frontend](https://github.com/Mohcen56/Cinemind-frontend) 
   
 </div>
