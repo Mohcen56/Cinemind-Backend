@@ -2,6 +2,7 @@
   <br />
   
   # 🎬 CineMind AI - Backend
+
   
   <div>
     <img src="https://img.shields.io/badge/-Django_5.1-black?style=for-the-badge&logoColor=white&logo=django&color=092E20" alt="django" />
