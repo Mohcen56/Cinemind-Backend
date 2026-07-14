@@ -1,22 +1,25 @@
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate, get_user_model
+from django.middleware.csrf import get_token
 from .serializers import UserSerializer, RegisterSerializer, LoginSerializer, PasswordChangeSerializer
 from .throttles import LoginRateThrottle, RegisterRateThrottle, PasswordChangeThrottle, ProfileUpdateThrottle
-from .authentication import set_auth_cookie, clear_auth_cookie
+from .authentication import clear_auth_cookie, enforce_csrf, set_auth_cookie
 
 User = get_user_model()
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([RegisterRateThrottle])
 def register(request):
     """
     Register a new user account
     """
+    enforce_csrf(request)
     serializer = RegisterSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
@@ -25,7 +28,8 @@ def register(request):
         response = Response({
             'success': True,
             'message': 'Registration successful',
-            'user': UserSerializer(user, context={'request': request}).data
+            'user': UserSerializer(user, context={'request': request}).data,
+            'csrfToken': get_token(request),
         }, status=status.HTTP_201_CREATED)
         
         # Set HTTP-only cookie with auth token (XSS safe)
@@ -38,6 +42,7 @@ def register(request):
     }, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([LoginRateThrottle])
 def login(request):
@@ -45,6 +50,7 @@ def login(request):
     Login user and return auth token.
     Rate limited to prevent brute force attacks.
     """
+    enforce_csrf(request)
     serializer = LoginSerializer(data=request.data)
     if not serializer.is_valid():
         return Response({
@@ -72,12 +78,22 @@ def login(request):
     response = Response({
         'success': True,
         'message': 'Login successful',
-        'user': UserSerializer(user, context={'request': request}).data
+        'user': UserSerializer(user, context={'request': request}).data,
+        'csrfToken': get_token(request),
     }, status=status.HTTP_200_OK)
     
     # Set HTTP-only cookie with auth token (XSS safe)
     set_auth_cookie(response, token.key)
     return response
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def csrf_token(request):
+    """Issue a CSRF cookie and return its masked token to browser clients."""
+
+    return Response({'csrfToken': get_token(request)}, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -85,21 +101,13 @@ def logout(request):
     """
     Logout user by deleting auth token and clearing cookie
     """
-    try:
-        request.user.auth_token.delete()
-        response = Response({
-            'success': True,
-            'message': 'Logout successful'
-        }, status=status.HTTP_200_OK)
-        
-        # Clear the HTTP-only auth cookie
-        clear_auth_cookie(response)
-        return response
-    except Exception as e:
-        return Response({
-            'success': False,
-            'error': str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
+    Token.objects.filter(user=request.user).delete()
+    response = Response({
+        'success': True,
+        'message': 'Logout successful'
+    }, status=status.HTTP_200_OK)
+    clear_auth_cookie(response)
+    return response
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -214,11 +222,12 @@ def change_password(request):
     Token.objects.filter(user=user).delete()
     token = Token.objects.create(user=user)
     
-    return Response({
+    response = Response({
         'success': True,
-        'message': 'Password changed successfully',
-        'token': token.key
+        'message': 'Password changed successfully'
     }, status=status.HTTP_200_OK)
+    set_auth_cookie(response, token.key)
+    return response
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

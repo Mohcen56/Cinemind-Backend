@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
-import os
 import dj_database_url
 from decouple import config
 
@@ -35,8 +34,12 @@ SECRET_KEY = config("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", cast=bool, default=False)
 
-ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="").split(",")
-CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="").split(",")
+def csv_config(name):
+    return [value.strip() for value in config(name, default="").split(",") if value.strip()]
+
+
+ALLOWED_HOSTS = csv_config("ALLOWED_HOSTS")
+CORS_ALLOWED_ORIGINS = csv_config("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept',
@@ -49,10 +52,31 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
-CORS_EXPOSE_HEADERS = ['Set-Cookie']
-
 # CSRF trusted domains
-CSRF_TRUSTED_ORIGINS = config("CSRF_TRUSTED_ORIGINS", default="").split(",")
+CSRF_TRUSTED_ORIGINS = csv_config("CSRF_TRUSTED_ORIGINS")
+
+# Browser authentication cookies are ambient credentials. Cookie-authenticated
+# unsafe requests are therefore validated by Django's CSRF machinery in
+# user.authentication.CookieTokenAuthentication.
+AUTH_COOKIE_NAME = "authToken"
+AUTH_COOKIE_MAX_AGE = config("AUTH_COOKIE_MAX_AGE", cast=int, default=7 * 24 * 60 * 60)
+AUTH_COOKIE_SECURE = config("AUTH_COOKIE_SECURE", cast=bool, default=not DEBUG)
+AUTH_COOKIE_SAMESITE = config(
+    "AUTH_COOKIE_SAMESITE",
+    default="None" if AUTH_COOKIE_SECURE else "Lax",
+)
+
+CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", cast=bool, default=not DEBUG)
+CSRF_COOKIE_SAMESITE = config(
+    "CSRF_COOKIE_SAMESITE",
+    default="None" if CSRF_COOKIE_SECURE else "Lax",
+)
+CSRF_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SECURE = config("SESSION_COOKIE_SECURE", cast=bool, default=not DEBUG)
+SESSION_COOKIE_SAMESITE = config(
+    "SESSION_COOKIE_SAMESITE",
+    default="None" if SESSION_COOKIE_SECURE else "Lax",
+)
 
 
 
@@ -181,8 +205,7 @@ AUTH_USER_MODEL = 'user.User'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'user.authentication.CookieTokenAuthentication',  # HTTP-only cookie auth (XSS safe)
-        'rest_framework.authentication.TokenAuthentication',  # Fallback for API clients
+        'user.authentication.CookieTokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',

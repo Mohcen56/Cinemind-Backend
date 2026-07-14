@@ -1,7 +1,6 @@
 # Environment variables
 .env
-.env.local
-.env.production
+.env.*
 
 # Python
 __pycache__/
@@ -15,8 +14,8 @@ env/
 
 # Django
 *.log
-db.sqlite3
-db.sqlite3-journal
+/db.sqlite3
+/db.sqlite3-journal
 /staticfiles/
 /media/
 
