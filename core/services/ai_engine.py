@@ -2,16 +2,29 @@
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 
 from user.models import MovieInteraction
 
 BASE_URL = "https://api.themoviedb.org/3"
-_title_cache = {}
+TITLE_CACHE_SECONDS = 24 * 60 * 60
 
-# Helper to turn an ID (550) into a movie title using TMDB Bearer token (v4)
+
 def get_movie_title(movie_id: int):
-    if movie_id in _title_cache:
-        return _title_cache[movie_id]
+    cache_key = f"tmdb:movie-title:{movie_id}"
+    cached_title = cache.get(cache_key)
+    if cached_title:
+        return cached_title
+
+    stored_title = (
+        MovieInteraction.objects.filter(movie_id=movie_id)
+        .exclude(movie_title="")
+        .values_list("movie_title", flat=True)
+        .first()
+    )
+    if stored_title:
+        cache.set(cache_key, stored_title, TITLE_CACHE_SECONDS)
+        return stored_title
 
     headers = {
         "Authorization": f"Bearer {settings.TMDB_API_KEY}",
@@ -21,9 +34,15 @@ def get_movie_title(movie_id: int):
     try:
         r = requests.get(url, headers=headers, timeout=8)
         if r.status_code == 200:
-            title = r.json().get("title")
+            movie = r.json()
+            title = movie.get("title")
             if title:
-                _title_cache[movie_id] = title
+                poster_path = movie.get("poster_path") or ""
+                MovieInteraction.objects.filter(
+                    movie_id=movie_id,
+                    movie_title="",
+                ).update(movie_title=title, poster_path=poster_path)
+                cache.set(cache_key, title, TITLE_CACHE_SECONDS)
                 return title
             return None
         # Non-200: avoid noisy 'Unknown Movie' entries
@@ -31,17 +50,20 @@ def get_movie_title(movie_id: int):
     except Exception:
         return None
 
+
 def get_weighted_user_profile(user):
     # 1. Fetch all interactions for this user
     interactions = MovieInteraction.objects.filter(user=user)
     total_interactions = interactions.count()
-    print(f"[ai_engine] get_weighted_user_profile for user {user.username}: {total_interactions} total interactions")
+    print(
+        f"[ai_engine] get_weighted_user_profile for user {user.username}: {total_interactions} total interactions"
+    )
 
     # 2. Create buckets with priority hierarchy (highest to lowest)
-    loved = []   # Rating 5 (highest priority)
-    saved = []   # Watchlist without high rating
-    liked = []   # Rating 3-4
-    hated = []   # Rating 1-2 (avoid these patterns)
+    loved = []  # Rating 5 (highest priority)
+    saved = []  # Watchlist without high rating
+    liked = []  # Rating 3-4
+    hated = []  # Rating 1-2 (avoid these patterns)
 
     # 3. Sort movies into buckets with priority handling (skip missing titles)
     # Priority: HATED > LOVED > SAVED > LIKED (avoid duplicates across buckets)
@@ -49,12 +71,12 @@ def get_weighted_user_profile(user):
     saved_set = set()
     liked_set = set()
     hated_set = set()
-    
+
     for item in interactions:
-        title = get_movie_title(item.movie_id)
+        title = item.movie_title or get_movie_title(item.movie_id)
         if not title:
             continue
-        
+
         # Priority 1: HATED (rating 1-2) - strongest signal to avoid
         if item.rating and item.rating <= 2:
             hated_set.add(title)
@@ -77,8 +99,10 @@ def get_weighted_user_profile(user):
     saved = sorted(saved_set)
     liked = sorted(liked_set)
     hated = sorted(hated_set)
-    
-    print(f"[ai_engine] Final counts: LOVED={len(loved)}, SAVED={len(saved)}, LIKED={len(liked)}, HATED={len(hated)}")
+
+    print(
+        f"[ai_engine] Final counts: LOVED={len(loved)}, SAVED={len(saved)}, LIKED={len(liked)}, HATED={len(hated)}"
+    )
 
     profile_text = "User's Taste Profile:\n"
     if loved:

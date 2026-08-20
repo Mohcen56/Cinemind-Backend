@@ -1,62 +1,79 @@
-from django.shortcuts import render
-# your_app/views.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from django.conf import settings
 import json
-import requests
 import re
-import os
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from core.services.ai_engine import get_weighted_user_profile, get_movie_title
-from core.services.llm_providers import (
-    chat_with_groq,
-    chat_with_github_models,
-    choose_provider,
-)
-from user.models import MovieInteraction
-from core.services.tmdb import fetch_movies, trending_movies, get_movie_details
-from core.models import TrendingSearch
 
+import requests
+from django.conf import settings
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from core.models import TrendingSearch
+from core.services.ai_engine import get_movie_title, get_weighted_user_profile
+from core.services.llm_providers import chat_with_groq
+from core.services.tmdb import fetch_movies, get_movie_details, trending_movies
+from user.models import MovieInteraction
+from user.throttles import ChatRateThrottle
+
+
+def tmdb_error_response(error):
+    if isinstance(error, requests.Timeout):
+        return Response({"error": "TMDB request timed out"}, status=504)
+    return Response({"error": "TMDB service unavailable"}, status=502)
 
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def movies(request):
     q = request.GET.get("q")
     page = request.GET.get("page", "1")
-    
+
     try:
         page_num = int(page)
     except ValueError:
         page_num = 1
-    
-    data = fetch_movies(q, page_num)
-    return Response(data)
+
+    try:
+        data = fetch_movies(q, page_num)
+        return Response(data)
+    except requests.RequestException as error:
+        return tmdb_error_response(error)
+
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def movie_detail(request, movie_id):
     """Get detailed information for a specific movie"""
     try:
         data = get_movie_details(movie_id)
         return Response(data)
-    except Exception as e:
-        return Response({"error": str(e)}, status=400)
+    except requests.RequestException as error:
+        return tmdb_error_response(error)
+
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def tmdb_trending(request):
-    data = trending_movies()
-    # TMDB returns results in a 'results' array
-    return Response(data.get("results", []))
+    try:
+        data = trending_movies()
+        return Response(data.get("results", []))
+    except requests.RequestException as error:
+        return tmdb_error_response(error)
+
 
 @api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def update_search(request):
     search_term = request.data.get("searchTerm")
     movie = request.data.get("movie", {})
-    
+
     if not search_term or not movie:
         return Response({"error": "Missing searchTerm or movie"}, status=400)
-    
+
     # Get or create trending search entry
     trending, created = TrendingSearch.objects.get_or_create(
         search_term=search_term,
@@ -64,47 +81,62 @@ def update_search(request):
         defaults={
             "poster_url": movie.get("poster_path", ""),
             "title": movie.get("title"),
-            "count": 1
-        }
+            "count": 1,
+        },
     )
-    
+
     # Increment count if it already exists
     if not created:
         trending.count += 1
         trending.save()
-    
-    return Response({"status": "ok", "trending": {
-        "id": trending.id,
-        "search_term": trending.search_term,
-        "count": trending.count
-    }})
+
+    return Response(
+        {
+            "status": "ok",
+            "trending": {
+                "id": trending.id,
+                "search_term": trending.search_term,
+                "count": trending.count,
+            },
+        }
+    )
+
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def trending(request):
     # Get top 10 trending searches
     trending_searches = TrendingSearch.objects.all()[:10]
-    
+
     data = []
     for search in trending_searches:
-        data.append({
-            "$id": str(search.id),
-            "searchTerm": search.search_term,
-            "count": search.count,
-            "movie_id": search.movie_id,
-            "poster_url": search.poster_url,
-            "title": search.title
-        })
-    
+        data.append(
+            {
+                "$id": str(search.id),
+                "searchTerm": search.search_term,
+                "count": search.count,
+                "movie_id": search.movie_id,
+                "poster_url": search.poster_url,
+                "title": search.title,
+            }
+        )
+
     return Response(data)
 
-#using Groq (fast) and GitHub Models (smart)
+
+# using Groq (fast) and GitHub Models (smart)
+
 
 class AIChatView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ChatRateThrottle]
+
     def post(self, request):
         # 1. Get the user's message and conversation history from the frontend
-        user_query = request.data.get('message')
-        conversation_history = request.data.get('history', [])  # List of {role, content, movies}
-        
+        user_query = request.data.get("message")
+        conversation_history = request.data.get("history", [])  # List of {role, content, movies}
+
         if not user_query or not str(user_query).strip():
             return Response({"error": "Missing 'message' in request body"}, status=400)
 
@@ -114,13 +146,13 @@ class AIChatView(APIView):
         if conversation_history:
             history_lines = []
             for msg in conversation_history[-6:]:  # Last 6 messages for context
-                role = msg.get('role', 'user')
-                content = msg.get('content', '')
-                movies = msg.get('movies', [])
-                if role == 'user':
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                movies = msg.get("movies", [])
+                if role == "user":
                     history_lines.append(f"User: {content}")
                 else:
-                    movie_titles = [m.get('title', '') for m in movies] if movies else []
+                    movie_titles = [m.get("title", "") for m in movies] if movies else []
                     if movie_titles:
                         last_recommended_movies = movie_titles  # Track for explanations
                         history_lines.append(f"Assistant: {content}")
@@ -132,10 +164,17 @@ class AIChatView(APIView):
             print(f"[AIChatView] Last recommended movies: {last_recommended_movies}")
 
         # 2. Check if asking for "best/top" movies - should use TMDB data
-        best_query_keywords = ["best", "top", "highest rated", "most popular", "top rated", "highest scoring"]
+        best_query_keywords = [
+            "best",
+            "top",
+            "highest rated",
+            "most popular",
+            "top rated",
+            "highest scoring",
+        ]
         user_query_lower = user_query.lower()
         is_best_query = any(kw in user_query_lower for kw in best_query_keywords)
-        
+
         # Extract genre/category for TMDB lookup
         genre_map = {
             "anime": {"genre_id": 16, "language": "ja"},
@@ -148,7 +187,7 @@ class AIChatView(APIView):
             "romance": {"genre_id": 10749},
             "animation": {"genre_id": 16},
         }
-        
+
         tmdb_top_movies = []
         detected_genre = None
         saved_watchlist_ids = set()
@@ -160,7 +199,9 @@ class AIChatView(APIView):
             for keyword, config in genre_map.items():
                 if keyword in user_query_lower:
                     detected_genre = keyword
-                    tmdb_top_movies = self.get_top_rated_by_genre(config.get("genre_id"), config.get("language"))
+                    tmdb_top_movies = self.get_top_rated_by_genre(
+                        config.get("genre_id"), config.get("language")
+                    )
                     break
             # If no specific genre found, fetch top-rated movies across all genres
             if not detected_genre:
@@ -168,30 +209,48 @@ class AIChatView(APIView):
 
         # 3. Determine if this request needs personalized recommendations
         personalization_keywords = [
-            "for me", "based on my", "my taste", "what should i watch",
-            "recommend", "suggest", "suitable for me", "like me",
-            "similar to what i like", "match my", "prefer"
+            "for me",
+            "based on my",
+            "my taste",
+            "what should i watch",
+            "recommend",
+            "suggest",
+            "suitable for me",
+            "like me",
+            "similar to what i like",
+            "match my",
+            "prefer",
         ]
         needs_personalization = any(kw in user_query_lower for kw in personalization_keywords)
-        
+
         # Also detect general discovery requests (need TMDB suggestions)
         discovery_keywords = [
-            "get me", "find me", "something to watch", "movie to watch",
-            "what to watch", "show me", "give me", "i want to watch"
+            "get me",
+            "find me",
+            "something to watch",
+            "movie to watch",
+            "what to watch",
+            "show me",
+            "give me",
+            "i want to watch",
         ]
-        is_discovery = any(kw in user_query_lower for kw in discovery_keywords) or needs_personalization
-        
+        is_discovery = (
+            any(kw in user_query_lower for kw in discovery_keywords) or needs_personalization
+        )
+
         # ALWAYS fetch TMDB top movies for discovery/recommendation requests
         if is_discovery and not tmdb_top_movies:
             # Check for genre-specific discovery
             for keyword, config in genre_map.items():
                 if keyword in user_query_lower:
                     detected_genre = keyword
-                    tmdb_top_movies = self.get_top_rated_by_genre(config.get("genre_id"), config.get("language"))
+                    tmdb_top_movies = self.get_top_rated_by_genre(
+                        config.get("genre_id"), config.get("language")
+                    )
                     break
             if not detected_genre:
                 tmdb_top_movies = self.get_top_rated_movies()
-        
+
         # Detect saved/watchlist requests and extract genre keyword
         watchlist_request = any(k in user_query_lower for k in ["saved", "watchlist"])
         watchlist_keyword = next((k for k in genre_map if k in user_query_lower), None)
@@ -199,16 +258,14 @@ class AIChatView(APIView):
         # 4. Build user's taste profile and saved watchlist for ALL authenticated users
         user_profile = ""
         saved_watchlist = []
-        if getattr(request.user, 'is_authenticated', False):
+        if getattr(request.user, "is_authenticated", False):
             # Load saved watchlist (for "saved later" requests)
             try:
-                saved_items = (
-                    MovieInteraction.objects
-                    .filter(user=request.user, is_saved=True)
-                    .only("movie_id")
-                )
+                saved_items = MovieInteraction.objects.filter(
+                    user=request.user, is_saved=True
+                ).only("movie_id", "movie_title")
                 for item in saved_items:
-                    title = get_movie_title(item.movie_id)
+                    title = item.movie_title or get_movie_title(item.movie_id)
                     if title:
                         saved_watchlist.append({"id": item.movie_id, "title": title})
                         saved_watchlist_ids.add(item.movie_id)
@@ -225,16 +282,14 @@ class AIChatView(APIView):
 
             # Collect rated movies to exclude from recommendations (use as preference only)
             try:
-                rated_items = (
-                    MovieInteraction.objects
-                    .filter(user=request.user)
-                    .exclude(rating__isnull=True)
+                rated_items = MovieInteraction.objects.filter(user=request.user).exclude(
+                    rating__isnull=True
                 )
                 for item in rated_items:
                     if item.is_saved:
                         continue
                     rated_exclusion_ids.add(item.movie_id)
-                    title = get_movie_title(item.movie_id)
+                    title = item.movie_title or get_movie_title(item.movie_id)
                     if title:
                         rated_exclusion_titles.append(title)
             except Exception:
@@ -248,13 +303,19 @@ class AIChatView(APIView):
                 "\nRated movies (DO NOT recommend these; use only as preference signals):\n"
                 f"{formatted}\n"
             )
-        
+
         # Only add profile to prompt if it exists and is meaningful
-        profile_section = f"\nUser Taste Profile:\n{user_profile}\n" if user_profile and "(no interactions yet)" not in user_profile else ""
+        profile_section = (
+            f"\nUser Taste Profile:\n{user_profile}\n"
+            if user_profile and "(no interactions yet)" not in user_profile
+            else ""
+        )
         if profile_section:
             print(f"[AIChatView] Profile included in prompt ({len(profile_section)} chars)")
         else:
-            print(f"[AIChatView] No profile included (user has no interactions or not authenticated)")
+            print(
+                "[AIChatView] No profile included (user has no interactions or not authenticated)"
+            )
 
         # Handle saved/watchlist requests with genre filtering
         if watchlist_request:
@@ -275,7 +336,7 @@ class AIChatView(APIView):
                             if movie_language != required_language:
                                 continue
                         filtered_saved.append(m)
-                
+
                 if filtered_saved:
                     # Return filtered saved movies
                     saved_movies_details = []
@@ -283,47 +344,64 @@ class AIChatView(APIView):
                         tmdb_data = self.fetch_tmdb_details(m["title"])
                         if tmdb_data:
                             saved_movies_details.append(tmdb_data)
-                    
-                    return Response({
-                        "response_text": "Here are picks from your saved list.",
-                        "movies": saved_movies_details,
-                        "provider": "rule-based",
-                        "model": "saved-filtered"
-                    })
+
+                    return Response(
+                        {
+                            "response_text": "Here are picks from your saved list.",
+                            "movies": saved_movies_details,
+                            "provider": "rule-based",
+                            "model": "saved-filtered",
+                        }
+                    )
                 else:
                     # No matches for this genre in saved list
                     fallback_movies = []
                     genre_label = watchlist_keyword if watchlist_keyword else ""
                     if watchlist_keyword and watchlist_keyword in genre_map:
                         cfg = genre_map[watchlist_keyword]
-                        fallback_movies = self.get_top_rated_by_genre(cfg.get("genre_id"), cfg.get("language")) or []
+                        fallback_movies = (
+                            self.get_top_rated_by_genre(cfg.get("genre_id"), cfg.get("language"))
+                            or []
+                        )
                     else:
                         fallback_movies = self.get_top_rated_movies() or []
-                    
+
                     # Filter out already rated movies (user has watched them)
-                    filtered_fallback = [m for m in fallback_movies if m.get("id") not in rated_exclusion_ids]
-                    
-                    message = f"You don't have any {genre_label} movies saved, but here are some you may like:" if genre_label else "You haven't saved any movies that match your request, but here are some you may like:"
-                    
-                    return Response({
-                        "response_text": message,
-                        "movies": filtered_fallback[:5],
-                        "provider": "rule-based",
-                        "model": "saved-fallback"
-                    })
+                    filtered_fallback = [
+                        m for m in fallback_movies if m.get("id") not in rated_exclusion_ids
+                    ]
+
+                    message = (
+                        f"You don't have any {genre_label} movies saved, but here are some you may like:"
+                        if genre_label
+                        else "You haven't saved any movies that match your request, but here are some you may like:"
+                    )
+
+                    return Response(
+                        {
+                            "response_text": message,
+                            "movies": filtered_fallback[:5],
+                            "provider": "rule-based",
+                            "model": "saved-fallback",
+                        }
+                    )
             else:
                 # No saved movies at all
                 fallback_movies = self.get_top_rated_movies() or []
                 # Filter out already rated movies
-                filtered_fallback = [m for m in fallback_movies if m.get("id") not in rated_exclusion_ids]
-                
-                return Response({
-                    "response_text": "You haven't saved any movies yet, but here are some you may like:",
-                    "movies": filtered_fallback[:5],
-                    "provider": "rule-based",
-                    "model": "saved-empty"
-                })
-        
+                filtered_fallback = [
+                    m for m in fallback_movies if m.get("id") not in rated_exclusion_ids
+                ]
+
+                return Response(
+                    {
+                        "response_text": "You haven't saved any movies yet, but here are some you may like:",
+                        "movies": filtered_fallback[:5],
+                        "provider": "rule-based",
+                        "model": "saved-empty",
+                    }
+                )
+
         watchlist_section = ""
         if saved_watchlist:
             formatted = "\n".join([f"- {m['title']} (id: {m['id']})" for m in saved_watchlist[:20]])
@@ -331,11 +409,13 @@ class AIChatView(APIView):
                 "\nUser Saved/Watchlist movies (MAX 2 from here for discovery requests, rest must be new):\n"
                 f"{formatted}\n"
             )
-        
+
         # Add TMDB data context if we found top-rated movies
         tmdb_context = ""
         if tmdb_top_movies:
-            tmdb_list = "\n".join([f"- {m['title']} ({m.get('vote_average', 'N/A')}/10)" for m in tmdb_top_movies])
+            tmdb_list = "\n".join(
+                [f"- {m['title']} ({m.get('vote_average', 'N/A')}/10)" for m in tmdb_top_movies]
+            )
             heading = detected_genre.title() if detected_genre else "Popular"
             tmdb_context = f"\n\nTMDB {heading} Movies (PICK FROM THIS LIST for new discoveries):\n{tmdb_list}\n\nCRITICAL: For new recommendations, you MUST pick movies from this TMDB list above. These titles are verified to exist."
 
@@ -343,23 +423,17 @@ class AIChatView(APIView):
         history_section = ""
         last_movies_section = ""
         if history_context:
-            history_section = f"\n\n### CONVERSATION HISTORY (use this for context):\n{history_context}\n"
+            history_section = (
+                f"\n\n### CONVERSATION HISTORY (use this for context):\n{history_context}\n"
+            )
         if last_recommended_movies:
             last_movies_section = f"\n\n### YOUR LAST RECOMMENDATIONS (reference these when asked 'why'):\n{', '.join(last_recommended_movies)}\n"
 
-        # 5. Validate that at least one provider is configured
-        if not (getattr(settings, 'GROQ_API_KEY', None) or getattr(settings, 'GITHUB_API_KEY', None)):
-            return Response({"error": "No AI provider configured (GROQ_API_KEY or GITHUB_API_KEY)."}, status=500)
+        # 5. Validate that the provider is configured
+        if not getattr(settings, "GROQ_API_KEY", None):
+            return Response({"error": "No AI provider configured (GROQ_API_KEY)."}, status=500)
 
         # 7. System Prompt
-        # Build TMDB movie list for JSON format
-        tmdb_json_movies = ""
-        if tmdb_top_movies:
-            tmdb_json_movies = ",".join([
-                f'{{"title": "{m["title"]}", "year": "{m.get("vote_average", "N/A")}"}}'
-                for m in tmdb_top_movies
-            ])
-        
         prompt = f"""
 ### ROLE & OBJECTIVE
 You are CineMind, a friendly but concise movie expert AI. Your goal is to understand user intent and provide movie data strictly in JSON format.
@@ -441,49 +515,45 @@ Output: {{ "response_text": "1) Movie A - matches your love for sci-fi. 2) Movie
 User Request: "{user_query}"
 """
 
-        print(f"[AIChatView] About to call AI provider...")
-        print(f"[AIChatView] Prompt summary: profile={bool(profile_section)} watchlist={bool(watchlist_section)} tmdb={bool(tmdb_context)}")
-        
-        # 6. Send to selected provider requesting JSON
+        print("[AIChatView] About to call AI provider...")
+        print(
+            f"[AIChatView] Prompt summary: profile={bool(profile_section)} watchlist={bool(watchlist_section)} tmdb={bool(tmdb_context)}"
+        )
+
+        # 6. Send to Groq, retrying with a second production model if needed.
         raw_text = ""
-        provider = choose_provider(user_query, needs_personalization)
         provider_used = None
         model_used = None
-        try:
-            if provider == "github" and getattr(settings, 'GITHUB_API_KEY', None):
-                raw_text = chat_with_github_models(prompt)
-                provider_used = "github"
-                model_used = os.getenv("GITHUB_MODEL", "gpt-4o")
-            else:
-                raw_text = chat_with_groq(prompt)
-                provider_used = "groq"
-                model_used = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-        except Exception as primary_err:
-            # Fallback to the other provider if available
+        provider_errors = []
+        models = list(dict.fromkeys([settings.GROQ_MODEL, settings.GROQ_FALLBACK_MODEL]))
+
+        for index, model in enumerate(models):
             try:
-                if provider == "github" and getattr(settings, 'GROQ_API_KEY', None):
-                    raw_text = chat_with_groq(prompt)
-                    provider_used = "groq:fallback"
-                    model_used = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-                elif provider == "groq" and getattr(settings, 'GITHUB_API_KEY', None):
-                    raw_text = chat_with_github_models(prompt)
-                    provider_used = "github:fallback"
-                    model_used = os.getenv("GITHUB_MODEL", "gpt-4o")
-                else:
-                    raise primary_err
-            except Exception as fallback_err:
-                print("[AIChatView] provider errors:", primary_err, fallback_err)
-                return Response({
+                raw_text = chat_with_groq(prompt, model=model)
+                provider_used = "groq" if index == 0 else "groq:fallback"
+                model_used = model
+                break
+            except Exception as provider_error:
+                provider_errors.append(provider_error)
+
+        if not raw_text:
+            print("[AIChatView] provider errors:", *provider_errors)
+            return Response(
+                {
                     "response_text": "I couldn't reach the AI service right now. Try again soon.",
                     "movies": [],
-                    "error": str(primary_err)
-                }, status=200)
+                    "error": str(provider_errors[0])
+                    if provider_errors
+                    else "Unknown provider error",
+                },
+                status=200,
+            )
 
-        print(f"[AIChatView] provider={provider_used or provider} model={model_used}")
+        print(f"[AIChatView] provider={provider_used} model={model_used}")
 
         # 7. Parse JSON robustly; avoid repeating the generic fallback message
         print(f"[AIChatView] AI response received ({len(raw_text)} chars), parsing JSON...")
-        raw_text = raw_text or ''
+        raw_text = raw_text or ""
 
         ai_data = None
 
@@ -506,19 +576,19 @@ User Request: "{user_query}"
         if ai_data is None:
             ai_data = {
                 "response_text": raw_text.strip() or "I couldn't parse the AI response.",
-                "recommendations": []
+                "recommendations": [],
             }
 
         # 8. Validate with TMDB to get Posters (optional), and filter out rated exclusions unless saved
         final_movies = []
-        for rec in ai_data.get('recommendations', []):
-            title = rec.get('title') if isinstance(rec, dict) else None
+        for rec in ai_data.get("recommendations", []):
+            title = rec.get("title") if isinstance(rec, dict) else None
             if not title:
                 continue
             try:
                 tmdb_data = self.fetch_tmdb_details(title)
                 if tmdb_data:
-                    tmdb_id = tmdb_data.get('id')
+                    tmdb_id = tmdb_data.get("id")
                     if tmdb_id in rated_exclusion_ids and tmdb_id not in saved_watchlist_ids:
                         # Skip recommending rated (non-saved) movies
                         continue
@@ -528,12 +598,14 @@ User Request: "{user_query}"
                 print(f"[AIChatView] TMDB search failed for '{title}': {fetch_err}")
                 continue
 
-        return Response({
-            "response_text": ai_data.get('response_text', ''),
-            "movies": final_movies,
-            "provider": provider_used or provider,
-            "model": model_used
-        })
+        return Response(
+            {
+                "response_text": ai_data.get("response_text", ""),
+                "movies": final_movies,
+                "provider": provider_used or "groq",
+                "model": model_used,
+            }
+        )
 
     def get_movie_genres(self, movie_id):
         """Get genre IDs for a movie from TMDB"""
@@ -542,7 +614,7 @@ User Request: "{user_query}"
             "accept": "application/json",
         }
         url = f"https://api.themoviedb.org/3/movie/{movie_id}"
-        
+
         try:
             resp = requests.get(url, headers=headers, timeout=5)
             resp.raise_for_status()
@@ -559,7 +631,7 @@ User Request: "{user_query}"
             "accept": "application/json",
         }
         url = f"https://api.themoviedb.org/3/movie/{movie_id}"
-        
+
         try:
             resp = requests.get(url, headers=headers, timeout=5)
             resp.raise_for_status()
@@ -575,20 +647,20 @@ User Request: "{user_query}"
             "Authorization": f"Bearer {settings.TMDB_API_KEY}",
             "accept": "application/json",
         }
-        url = f"https://api.themoviedb.org/3/search/movie"
+        url = "https://api.themoviedb.org/3/search/movie"
         params = {"query": title}
-        
+
         try:
-            resp = requests.get(url, headers=headers, params=params)
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
             resp.raise_for_status()
             data = resp.json()
-            if data.get('results'):
-                movie = data['results'][0]
+            if data.get("results"):
+                movie = data["results"][0]
                 return {
-                    "id": movie.get('id'),
-                    "title": movie.get('title'),
-                    "poster_path": movie.get('poster_path'),
-                    "overview": movie.get('overview')
+                    "id": movie.get("id"),
+                    "title": movie.get("title"),
+                    "poster_path": movie.get("poster_path"),
+                    "overview": movie.get("overview"),
                 }
         except Exception as e:
             print(f"[AIChatView.fetch_tmdb_details] error: {e}")
@@ -601,36 +673,41 @@ User Request: "{user_query}"
             "accept": "application/json",
         }
         url = "https://api.themoviedb.org/3/discover/movie"
-        
+
         params = {
             "with_genres": genre_id,
             "sort_by": "vote_average.desc",
             "vote_count.gte": 1000,  # Minimum votes for credibility
-            "page": 1
+            "page": 1,
         }
-        
+
         # Add language filter if specified (e.g., "ja" for anime)
         if language:
             params["with_original_language"] = language
-        
+
         try:
-            resp = requests.get(url, headers=headers, params=params)
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
             resp.raise_for_status()
             data = resp.json()
-            
+
             results = []
-            for movie in data.get('results', [])[:20]:  # Fetch 20 to ensure 5 unrated after filtering
-                results.append({
-                    "id": movie.get('id'),
-                    "title": movie.get('title'),
-                    "poster_path": movie.get('poster_path'),
-                    "overview": movie.get('overview'),
-                    "vote_average": movie.get('vote_average')
-                })
+            for movie in data.get("results", [])[
+                :20
+            ]:  # Fetch 20 to ensure 5 unrated after filtering
+                results.append(
+                    {
+                        "id": movie.get("id"),
+                        "title": movie.get("title"),
+                        "poster_path": movie.get("poster_path"),
+                        "overview": movie.get("overview"),
+                        "vote_average": movie.get("vote_average"),
+                    }
+                )
             return results
         except Exception as e:
             print(f"[AIChatView.get_top_rated_by_genre] error: {e}")
             return []
+
     def get_top_rated_movies(self):
         """Fetch top-rated movies across all genres when no specific genre is provided"""
         headers = {
@@ -638,27 +715,31 @@ User Request: "{user_query}"
             "accept": "application/json",
         }
         url = "https://api.themoviedb.org/3/discover/movie"
-        
+
         params = {
             "sort_by": "vote_average.desc",
             "vote_count.gte": 2000,  # Higher threshold for quality
-            "page": 1
+            "page": 1,
         }
-        
+
         try:
-            resp = requests.get(url, headers=headers, params=params)
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
             resp.raise_for_status()
             data = resp.json()
-            
+
             results = []
-            for movie in data.get('results', [])[:20]:  # Fetch 20 to ensure 5 unrated after filtering
-                results.append({
-                    "id": movie.get('id'),
-                    "title": movie.get('title'),
-                    "poster_path": movie.get('poster_path'),
-                    "overview": movie.get('overview'),
-                    "vote_average": movie.get('vote_average')
-                })
+            for movie in data.get("results", [])[
+                :20
+            ]:  # Fetch 20 to ensure 5 unrated after filtering
+                results.append(
+                    {
+                        "id": movie.get("id"),
+                        "title": movie.get("title"),
+                        "poster_path": movie.get("poster_path"),
+                        "overview": movie.get("overview"),
+                        "vote_average": movie.get("vote_average"),
+                    }
+                )
             return results
         except Exception as e:
             print(f"[AIChatView.get_top_rated_movies] error: {e}")

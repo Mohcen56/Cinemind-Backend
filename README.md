@@ -1,418 +1,275 @@
-<div align="center">
-  <br />
-  
-  # 🎬 CineMind AI - Backend
+# CineMind API
 
-  
-  <div>
-    <img src="https://img.shields.io/badge/-Django_5.1-black?style=for-the-badge&logoColor=white&logo=django&color=092E20" alt="django" />
-    <img src="https://img.shields.io/badge/-Django_REST-black?style=for-the-badge&logoColor=white&logo=django&color=A30000" alt="drf" />
-    <img src="https://img.shields.io/badge/-PostgreSQL-black?style=for-the-badge&logoColor=white&logo=postgresql&color=4169E1" alt="postgresql" />
-    <img src="https://img.shields.io/badge/-Python_3.11-black?style=for-the-badge&logoColor=white&logo=python&color=3776AB" alt="python" />
-    <img src="https://img.shields.io/badge/-Groq_AI-black?style=for-the-badge&logoColor=white&logo=openai&color=412991" alt="groq" />
-  </div>
+<p align="center">
+  <strong>A secure, personalized movie-discovery API built with Django REST Framework.</strong>
+</p>
 
-  <h3 align="center">🤖 Intelligent Movie Discovery API with RAG-Powered Recommendations</h3>
+<p align="center">
+  <a href="https://github.com/Mohcen56/Cinemind-Backend/actions/workflows/main_cinemind-backend.yml">
+    <img alt="Backend CI" src="https://github.com/Mohcen56/Cinemind-Backend/actions/workflows/main_cinemind-backend.yml/badge.svg">
+  </a>
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <img alt="Django 5.2" src="https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white">
+  <img alt="Django REST Framework" src="https://img.shields.io/badge/DRF-3.15-A30000?logo=django&logoColor=white">
+  <img alt="Azure App Service" src="https://img.shields.io/badge/Deployed_on-Azure_App_Service-0078D4?logo=microsoftazure&logoColor=white">
+</p>
 
-</div>
+<p align="center">
+  <a href="https://github.com/Mohcen56/Cinemind-frontend">Frontend repository</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#api-reference">API reference</a>
+  ·
+  <a href="DEPLOYMENT.md">Deployment guide</a>
+</p>
 
----
+CineMind helps people discover movies, maintain a watchlist, rate what they have seen, and receive conversational recommendations shaped by their own activity. The API combines live [TMDB](https://www.themoviedb.org/) data with a weighted taste profile and Groq-hosted language models.
 
-## 📋 Table of Contents
+This is not a thin AI wrapper. The backend owns authentication, CSRF enforcement, user-level data isolation, external-service failure handling, recommendation context, rate limiting, persistence, tests, and CI/CD.
 
-- [🎯 Overview](#-overview)
-- [🏗️ Architecture](#️-architecture)
-- [🧠 AI Engine (RAG Pipeline)](#-ai-engine-rag-pipeline)
-- [🔌 API Endpoints](#-api-endpoints)
-- [📦 Tech Stack](#-tech-stack)
-- [⚡ Getting Started](#-getting-started)
-- [🔐 Environment Variables](#-environment-variables)
-- [🚀 Deployment](#-deployment)
-- [📂 Project Structure](#-project-structure)
+## Engineering highlights
 
----
+- **Secure browser authentication** — token authentication is stored in an HTTP-only cookie, while every unsafe cookie-authenticated request is protected by Django CSRF validation. API clients may alternatively use an explicit `Authorization` header.
+- **Strict account isolation** — ratings and saved movies are always queried through the authenticated user, preventing one account from reading another account's activity.
+- **Personalized recommendations** — persisted interactions are converted into weighted `LOVES`, `LIKES`, `WATCHLIST`, and `HATES` signals before the assistant creates recommendations.
+- **Resilient integrations** — TMDB requests use explicit timeouts and meaningful gateway responses; Groq requests retry through a second production model when the primary model fails.
+- **Durable metadata** — movie titles and poster paths are stored with interactions, reducing repeated TMDB lookups and keeping preference generation useful when an upstream request is unavailable.
+- **Abuse protection** — dedicated throttles protect login, registration, profile, password, and chat endpoints.
+- **Deployment gates** — GitHub Actions runs linting, format validation, Django deployment checks, migration checks, tests, and dependency auditing before deploying a curated artifact to Azure.
 
-## 🎯 Overview
+## Architecture
 
-The **CineMind Backend** is a robust Django REST API that powers the CineMind AI movie discovery platform. It integrates multiple AI providers (Groq, GitHub Models) with the TMDB API to deliver intelligent, personalized movie recommendations using a sophisticated RAG (Retrieval-Augmented Generation) pipeline.
-
-### ✨ Key Highlights
-
-- 🤖 **Multi-LLM Support** - Smart routing between Groq (speed) and GPT-4o (intelligence)
-- 🎯 **RAG Architecture** - Context-aware recommendations using user preferences
-- � **Conversation Memory** - AI maintains context across chat sessions with history tracking
-- 🔒 **HTTP-Only Cookie Auth** - XSS-safe authentication with cross-origin support
-- 🚦 **Rate Limiting** - Protection against brute force attacks on all auth endpoints
-- 📊 **User Profiling** - Weighted preference system (LOVED > SAVED > LIKED > HATED)
-- 🎬 **TMDB Integration** - Real-time movie data, cast, and recommendations
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           🎬 CineMind Backend                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
-│  │   🌐 REST API   │    │   🔐 Auth       │    │   📊 Models     │         │
-│  │   (Django RF)   │◄──►│   (Token Auth)  │◄──►│   (ORM)         │         │
-│  └────────┬────────┘    └─────────────────┘    └────────┬────────┘         │
-│           │                                              │                  │
-│           ▼                                              ▼                  │
-│  ┌─────────────────────────────────────────────────────────────────┐       │
-│  │                        🔧 Services Layer                         │       │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────┐ │       │
-│  │  │  🧠 AI      │  │  🎭 LLM     │  │  🎬 TMDB    │  │ 🔍      │ │       │
-│  │  │  Engine     │  │  Providers  │  │  Service    │  │ Search  │ │       │
-│  │  │  (RAG)      │  │  Router     │  │  Wrapper    │  │ Service │ │       │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────────┘ │       │
-│  └─────────┼────────────────┼────────────────┼─────────────────────┘       │
-│            │                │                │                              │
-└────────────┼────────────────┼────────────────┼──────────────────────────────┘
-             │                │                │
-             ▼                ▼                ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   🗄️ Database   │  │   🤖 AI APIs    │  │   🎬 TMDB API   │
-│   PostgreSQL/   │  │  ┌───────────┐  │  │                 │
-│   SQLite        │  │  │ ⚡ Groq   │  │  │  Movie Data     │
-│                 │  │  │ (Llama)   │  │  │  Cast Info      │
-│  • Users        │  │  └───────────┘  │  │  Trending       │
-│  • Interactions │  │  ┌───────────┐  │  │  Recommendations│
-│  • Trending     │  │  │ 🧠 GitHub │  │  │                 │
-│                 │  │  │ (GPT-4o)  │  │  │                 │
-│                 │  │  └───────────┘  │  │                 │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+```mermaid
+flowchart LR
+    Client[Next.js frontend] -->|HTTP-only cookie + CSRF| API[Django REST API]
+    API --> Auth[Authentication and throttling]
+    API --> Discovery[Movie discovery service]
+    API --> Assistant[Recommendation assistant]
+    Discovery --> TMDB[TMDB API]
+    Assistant --> Profile[Weighted taste profile]
+    Assistant --> Groq[Groq API]
+    Profile --> DB[(SQLite / PostgreSQL)]
+    Auth --> DB
+    API --> DB
+    Actions[GitHub Actions] -->|verify, audit, deploy| Azure[Azure App Service]
 ```
 
----
+### Recommendation flow
 
-## 🧠 AI Engine (RAG Pipeline)
+1. CineMind reads only the authenticated user's saved movies and ratings.
+2. Interactions become positive, negative, and watchlist preference signals.
+3. Recent conversation context and relevant TMDB results are added to the prompt.
+4. Groq returns structured recommendations using the primary model or the configured fallback.
+5. Titles are validated against TMDB so the client receives real movie IDs, posters, and metadata.
 
-CineMind implements a sophisticated **Retrieval-Augmented Generation** architecture for personalized movie recommendations.
+The current implementation deliberately does **not** claim to be retrieval-augmented generation (RAG): it uses structured application data and live API context, not embeddings or a vector database.
 
-### 🔄 RAG Flow
+## Technology
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        🔄 RAG Pipeline Flow                              │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  📥 USER QUERY                                                           │
-│       │                                                                  │
-│       ▼                                                                  │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  1️⃣  RETRIEVAL PHASE                                            │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
-│  │  │ 👤 User     │  │ 🎬 TMDB     │  │ 💾 Rated    │              │    │
-│  │  │ Interactions│  │ Top Movies  │  │ & Saved    │               │    │
-│  │  │ (DB Query)  │  │ (API Call)  │  │ Movies     │               │    │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │    │
-│  │         └────────────────┼────────────────┘                      │    │
-│  │                          ▼                                       │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                             │                                            │
-│                             ▼                                            │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  2️⃣  AUGMENTATION PHASE                                         │    │
-│  │                                                                  │    │
-│  │  📊 Weighted User Profile:                                       │    │
-│  │  ┌─────────────────────────────────────────────────────┐        │    │
-│  │  │  ❌ HATED (1-2★)  → Avoid similar patterns          │        │    │
-│  │  │  ❤️  LOVED (5★)    → Strongest positive signal      │        │    │
-│  │  │  📌 SAVED         → High interest (watchlist)       │        │    │
-│  │  │  👍 LIKED (3-4★)  → General interest               │        │    │
-│  │  └─────────────────────────────────────────────────────┘        │    │
-│  │                                                                  │    │
-│  │  🎯 Intent Classification:                                       │    │
-│  │  • Personalization needed?  • Genre detection                    │    │
-│  │  • "Best/Top" queries       • Complexity analysis                │    │
-│  │                                                                  │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                             │                                            │
-│                             ▼                                            │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  3️⃣  GENERATION PHASE (Smart LLM Routing)                       │    │
-│  │                                                                  │    │
-│  │  ┌──────────────────┐         ┌──────────────────┐              │    │
-│  │  │  ⚡ GROQ          │         │  🧠 GITHUB       │              │    │
-│  │  │  (Llama 3.1 8B)  │         │  (GPT-4o)        │              │    │
-│  │  │                  │         │                  │              │    │
-│  │  │ • Simple queries │         │ • Complex queries│              │    │
-│  │  │ • < 220 chars    │         │ • Personalization│              │    │
-│  │  │ • Fast response  │         │ • Deep reasoning │              │    │
-│  │  └──────────────────┘         └──────────────────┘              │    │
-│  │                                                                  │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                             │                                            │
-│                             ▼                                            │
-│                     📤 AI RESPONSE                                       │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+| Area | Tools |
+| --- | --- |
+| API | Python, Django, Django REST Framework |
+| Authentication | DRF token authentication, HTTP-only cookies, Django CSRF |
+| Data | SQLite for development, PostgreSQL/Neon in production |
+| Movie data | TMDB API |
+| AI | Groq OpenAI-compatible API, primary/fallback models |
+| Production | Gunicorn, WhiteNoise, Azure App Service |
+| Quality | Django test suite, Ruff, pip-audit |
+| Delivery | GitHub Actions and Azure federated identity |
 
-### 🎯 LLM Routing Logic
+## Quick start
 
-| Condition | Provider | Model | Reason |
-|-----------|----------|-------|--------|
-| Personalization needed | GitHub | GPT-4o | Nuanced understanding |
-| Complex keywords (why, explain, analyze) | GitHub | GPT-4o | Deep reasoning |
-| Query > 220 characters | GitHub | GPT-4o | Complex context |
-| Simple, short queries | Groq | Llama 3.1 8B | Fast inference |
+### Requirements
 
----
+- Python 3.11 or newer
+- A [TMDB API read access token](https://developer.themoviedb.org/docs/getting-started)
+- A [Groq API key](https://console.groq.com/keys) for assistant features
 
-## 🔌 API Endpoints
+### Windows PowerShell
 
-### 🎬 Core API (`/api/`)
+```powershell
+git clone https://github.com/Mohcen56/Cinemind-Backend.git
+cd Cinemind-Backend
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/movies/` | Search/discover movies (with pagination) |
-| `GET` | `/movies/<id>/` | Get movie details with cast & recommendations |
-| `GET` | `/movies/trending/` | Get TMDB weekly trending movies |
-| `POST` | `/chat/` | AI chat with conversation history & context memory |
-| `GET` | `/search/trending/` | Get trending searches on platform |
-| `POST` | `/search/update/` | Update search trending analytics |
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements-dev.txt
 
-### 👤 User API (`/api/user/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/register/` | Create new user account |
-| `POST` | `/login/` | Authenticate and get token |
-| `POST` | `/logout/` | Invalidate auth token |
-| `GET` | `/profile/` | Get current user profile |
-| `PUT/PATCH` | `/profile/update/` | Update user profile |
-| `POST` | `/password/change/` | Change user password |
-| `POST` | `/movies/<id>/rate/` | Rate a movie (1-5 stars) |
-| `POST` | `/movies/<id>/save/` | Toggle movie save/watchlist |
-| `GET` | `/movies/<id>/interaction/` | Get user's interaction with movie |
-| `GET` | `/movies/saved/` | Get all saved movies |
-
----
-
-## 📦 Tech Stack
-
-### 🔧 Core Framework
-| Technology | Purpose |
-|------------|---------|
-| **Django 5.1** | Web framework |
-| **Django REST Framework** | RESTful API |
-| **Python 3.11+** | Runtime |
-
-### 🗄️ Database
-| Technology | Purpose |
-|------------|---------|
-| **SQLite** | Development database |
-| **PostgreSQL (Neon)** | Production database |
-| **dj-database-url** | Database URL parsing |
-
-### 🤖 AI/ML Providers
-| Provider | Model | Use Case |
-|----------|-------|----------|
-| **Groq** | Llama 3.1 8B Instant | Fast inference |
-| **GitHub Models** | GPT-4o | Complex reasoning |
-| **Google GenAI** | Gemini | Alternative provider |
-
-### 🔌 External APIs
-| API | Purpose |
-|-----|---------|
-| **TMDB API** | Movie data, cast, trending, recommendations |
-
-### 🚀 Production
-| Technology | Purpose |
-|------------|---------|
-| **Gunicorn** | WSGI HTTP Server |
-| **WhiteNoise** | Static file serving |
-| **CORS Headers** | Cross-origin requests |
-
----
-
-## ⚡ Getting Started
-
-### 📋 Prerequisites
-
-- Python 3.11+
-- pip (Python package manager)
-- Virtual environment (recommended)
-
-### 🛠️ Installation
-
-```bash
-# 1. Navigate to backend directory
-cd Backend
-
-# 2. Create virtual environment
-python -m venv venv
-
-# 3. Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# 4. Install dependencies
-pip install -r requirements.txt
-
-# 5. Create .env file (see Environment Variables section)
-cp .env.example .env
-
-# 6. Run migrations
+Copy-Item .env.example .env
 python manage.py migrate
-
-# 7. Create superuser (optional)
-python manage.py createsuperuser
-
-# 8. Start development server
 python manage.py runserver
 ```
 
-The API will be available at `http://127.0.0.1:8000/api/`
+### macOS or Linux
 
----
+```bash
+git clone https://github.com/Mohcen56/Cinemind-Backend.git
+cd Cinemind-Backend
 
-## 🔐 Environment Variables
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements-dev.txt
 
-Create a `.env` file in the `Backend` directory:
+cp .env.example .env
+python manage.py migrate
+python manage.py runserver
+```
+
+Open `.env` and replace the placeholder values before starting the server:
 
 ```env
-# 🔒 Django Core
-SECRET_KEY=your-super-secret-django-key
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-
-# 🌐 CORS Configuration
-CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-CSRF_TRUSTED_ORIGINS=http://localhost:3000
-
-# 🗄️ Database (optional - defaults to SQLite)
-DATABASE_URL=postgres://user:pass@host/dbname?sslmode=require
-
-# 🎬 TMDB API
-TMDB_API_KEY=your-tmdb-bearer-token
-
-# 🤖 AI Providers
+SECRET_KEY=generate-a-unique-random-secret
+TMDB_API_KEY=your-tmdb-read-access-token
 GROQ_API_KEY=your-groq-api-key
-GITHUB_API_KEY=your-github-models-api-key
 ```
 
----
-
-## 🚀 Deployment
-
-### ☁️ Azure App Service
-
-1. **Create App Service** (Python 3.11, Linux)
-2. **Configure Environment Variables** in Azure Portal
-3. **Deploy via Git** or Azure CLI
+Generate a Django secret without inventing one manually:
 
 ```bash
-# Azure CLI deployment
-az webapp up --name cinemind-backend --runtime "PYTHON:3.11"
+python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 ```
 
-### 📁 Files for Deployment
+The API starts at `http://127.0.0.1:8000`. SQLite is used automatically when `DATABASE_URL` is blank.
 
-| File | Purpose |
-|------|---------|
-| `Procfile` | Gunicorn startup command |
-| `startup.sh` | Custom startup script |
-| `requirements.txt` | Python dependencies |
+> [!IMPORTANT]
+> `.env` contains private credentials and is ignored by Git. Never commit it. `.env.example` contains names and safe placeholders so another developer knows how to configure the project.
 
-For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+## Environment variables
 
----
+| Variable | Purpose | Local default |
+| --- | --- | --- |
+| `SECRET_KEY` | Django cryptographic signing key | Required |
+| `TMDB_API_KEY` | TMDB bearer token | Required |
+| `GROQ_API_KEY` | Groq project key | Empty; chat requires it |
+| `GROQ_MODEL` | Primary assistant model | `openai/gpt-oss-20b` |
+| `GROQ_FALLBACK_MODEL` | Retry model | `openai/gpt-oss-120b` |
+| `DATABASE_URL` | PostgreSQL connection URL | Empty; uses SQLite |
+| `ALLOWED_HOSTS` | Comma-separated Django hosts | Localhost values |
+| `CORS_ALLOWED_ORIGINS` | Browser origins allowed to call the API | Next.js localhost |
+| `CSRF_TRUSTED_ORIGINS` | Trusted origins for unsafe requests | Next.js localhost |
+| `AUTH_COOKIE_SECURE` | Restrict auth cookie to HTTPS | `False` locally |
+| `SECURE_SSL_REDIRECT` | Redirect HTTP to HTTPS | `False` locally |
 
-## 📂 Project Structure
+See [`.env.example`](.env.example) for the complete local-development configuration. Production should use HTTPS-only cookies, `DEBUG=False`, HSTS, a PostgreSQL `DATABASE_URL`, and deployment-platform secrets.
 
+## API reference
+
+### Movie discovery
+
+| Method | Endpoint | Authentication | Description |
+| --- | --- | --- | --- |
+| `GET` | `/api/movies/?q={query}&page={page}` | Public | Search movies or browse popular titles |
+| `GET` | `/api/movies/{movie_id}/` | Public | Fetch details, credits, trailers, providers, and related movies |
+| `GET` | `/api/movies/trending/` | Public | Fetch TMDB's weekly trending movies |
+| `POST` | `/api/search/update/` | Public | Record a selected search result |
+| `GET` | `/api/search/trending/` | Public | Return the ten most selected searches |
+
+### Authentication and profiles
+
+| Method | Endpoint | Authentication | Description |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/csrf/` | Public | Issue the CSRF cookie and masked token |
+| `POST` | `/api/auth/register/` | CSRF | Create an account and authentication cookie |
+| `POST` | `/api/auth/login/` | CSRF | Authenticate by email and set the cookie |
+| `POST` | `/api/auth/logout/` | Required | Revoke the token and clear the cookie |
+| `GET` | `/api/auth/profile/` | Required | Return the current user |
+| `PATCH` | `/api/auth/profile/update/` | Required | Update profile fields |
+| `PATCH` | `/api/auth/profile/avatar/` | Required | Upload a profile image |
+| `POST` | `/api/auth/change-password/` | Required | Verify the old password and rotate credentials |
+
+### Personalization and assistant
+
+| Method | Endpoint | Authentication | Description |
+| --- | --- | --- | --- |
+| `POST` | `/api/auth/movies/{movie_id}/rate/` | Required | Set a rating from 0 to 5 in half-star steps |
+| `POST` | `/api/auth/movies/{movie_id}/save/` | Required | Toggle the movie in the user's watchlist |
+| `GET` | `/api/auth/movies/{movie_id}/interaction/` | Required | Return the current user's rating/save state |
+| `GET` | `/api/auth/movies/saved/` | Required | Return the current user's saved movies |
+| `POST` | `/api/chat/` | Required | Generate contextual movie recommendations |
+
+Browser clients should request `/api/auth/csrf/` first, send cookies with credentials enabled, and include the returned value in the `X-CSRFToken` header for unsafe methods.
+
+## Quality and testing
+
+External TMDB and Groq calls are mocked in the automated suite. The tests cover:
+
+- CSRF rejection and acceptance paths
+- Secure cookie creation and token revocation
+- Header-based API authentication
+- Password-change payload compatibility
+- Cross-account movie-interaction isolation
+- Saved/rated metadata persistence
+- TMDB timeouts and upstream failures
+- Chat authentication, throttling, fallback, and malformed model responses
+- Weighted preference-profile generation and caching
+
+Run the same quality gates used by CI:
+
+```bash
+ruff check .
+ruff format --check .
+python manage.py check
+python manage.py check --deploy
+python manage.py makemigrations --check --dry-run
+python manage.py test
+pip-audit -r requirements.txt
 ```
+
+## CI/CD
+
+Every pull request runs the verification job. A push to `main` deploys only after all checks pass:
+
+```text
+Install → Lint → Format check → Django checks → Migration check
+        → Tests → Dependency audit → Build artifact → Azure deployment
+```
+
+The deployment job uses Azure federated identity and uploads only runtime files instead of packaging the complete repository. See [DEPLOYMENT.md](DEPLOYMENT.md) for environment and infrastructure setup.
+
+## Repository guide
+
+The similarly named files are intentional:
+
+| File | Why it exists |
+| --- | --- |
+| `.env` | Your private, machine-specific values. Ignored by Git. |
+| `.env.example` | Safe configuration template committed for developers and CI documentation. |
+| `requirements.txt` | Packages required to run the API in production. |
+| `requirements-dev.txt` | Includes production packages plus Ruff and pip-audit for development/CI. |
+| `pyproject.toml` | Ruff's linting and formatting configuration. |
+| `Procfile` | Process declaration understood by platforms that support the Procfile convention. |
+| `startup.sh` | Azure/Linux startup sequence: install, collect static files, migrate, and start Gunicorn. |
+| `DEPLOYMENT.md` | Infrastructure and production configuration instructions. |
+| `.github/workflows/main_cinemind-backend.yml` | Automated verification and Azure deployment pipeline. |
+
+Separating runtime dependencies from development tools keeps production deployments smaller and reduces the production attack surface. Separating `.env` from `.env.example` prevents secrets from entering source control while keeping setup reproducible.
+
+## Project structure
+
+```text
 Backend/
-├── 📄 manage.py                 # Django management script
-├── 📄 requirements.txt          # Python dependencies
-├── 📄 Procfile                  # Gunicorn startup
-├── 📄 startup.sh                # Azure startup script
-├── 🗄️ db.sqlite3                # Development database
-│
-├── ⚙️ config/                   # Django project settings
-│   ├── settings.py              # Main configuration
-│   ├── urls.py                  # Root URL routing
-│   ├── wsgi.py                  # WSGI application
-│   └── asgi.py                  # ASGI application
-│
-├── 🎬 core/                     # Core movie functionality
-│   ├── models.py                # TrendingSearch model
-│   ├── views.py                 # Movie & chat endpoints
-│   ├── urls.py                  # Core URL patterns
-│   ├── admin.py                 # Admin configuration
-│   │
-│   └── 🔧 services/             # Business logic layer
-│       ├── ai_engine.py         # 🧠 RAG pipeline & user profiling
-│       ├── llm_providers.py     # 🤖 Multi-LLM routing
-│       ├── tmdb.py              # 🎬 TMDB API wrapper
-│       └── search.py            # 🔍 Search aggregation
-│
-├── 👤 user/                     # User management
-│   ├── models.py                # User & MovieInteraction models
-│   ├── views.py                 # Auth & profile endpoints
-│   ├── serializers.py           # DRF serializers
-│   ├── authentication.py        # 🔐 HTTP-only cookie auth
-│   ├── throttles.py             # 🚦 Rate limiting classes
-│   ├── urls.py                  # User URL patterns
-│   └── migrations/              # Database migrations
-│
-└── 📁 media/                    # User uploads
-    └── avatars/                 # Profile pictures
+├── config/                  # Django settings, root URLs, ASGI and WSGI
+├── core/                    # Discovery, trending, assistant, TMDB and AI services
+├── user/                    # Accounts, secure auth, profiles and movie interactions
+├── .github/workflows/       # CI/CD pipeline
+├── .env.example             # Safe environment template
+├── manage.py
+├── requirements.txt         # Runtime dependencies
+├── requirements-dev.txt     # Development and CI dependencies
+├── Procfile
+└── startup.sh
 ```
 
----
+## Design trade-offs and next steps
 
-## 🛡️ Security Features
+- Token cookies keep credentials away from browser JavaScript, but require deliberate CSRF handling; this API enforces both parts of that model.
+- The weighted taste profile is explainable and inexpensive, while embeddings could become useful later for semantic similarity at a larger catalog scale.
+- SQLite makes onboarding immediate; `DATABASE_URL` switches production to PostgreSQL without changing application code.
+- The next engineering milestones are generated OpenAPI documentation, structured production logging, Redis-backed throttling/cache, and end-to-end browser tests.
 
-- 🔐 **HTTP-Only Cookie Authentication** - XSS-safe token storage (no localStorage)
-- 🚦 **Rate Limiting** - Brute force protection on auth endpoints
-  - Login: 5 attempts/minute
-  - Register: 3 attempts/hour
-  - Password Change: 5 attempts/hour
-  - Profile Update: 20 attempts/hour
-- 🔒 **Password Validation** - Django's built-in validators
-- 🌐 **CORS Configuration** - Whitelist allowed origins with credentials support
-- 🛡️ **CSRF Protection** - Trusted origins only
-- 📝 **Environment Variables** - Secrets via python-decouple
-- 🔄 **SameSite Cookie Policy** - Lax for dev, None for production
+## Author
 
----
-
-## 🧪 API Testing
-
-Use the provided endpoints with tools like:
-
-- **Postman** or **Insomnia**
-- **cURL**
-- **Django REST Framework Browsable API** (`/api/`)
-
-### Example Request
-
-```bash
-# Get trending movies
-curl http://localhost:8000/api/movies/trending/
-
-# Search movies
-curl "http://localhost:8000/api/movies/?q=inception&page=1"
-
-# Login
-curl -X POST http://localhost:8000/api/user/login/ \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "yourpassword"}'
-```
-
----
-
-<div align="center">
-  
-  **Built with ❤️ using Django**
-  
-  [🎬 Frontend](https://github.com/Mohcen56/Cinemind-frontend) 
-  
-</div>
+Built by [Mohcen](https://github.com/Mohcen56) as a full-stack portfolio project focused on secure API design, external-service resilience, personalization, and automated delivery.

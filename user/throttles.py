@@ -14,8 +14,9 @@ class LoginRateThrottle(AnonRateThrottle):
     Protects against brute force password attacks.
     Default: 5 attempts per minute for anonymous users.
     """
-    scope = 'login'
-    rate = '5/min'
+
+    scope = "login"
+    rate = "5/min"
 
 
 class RegisterRateThrottle(AnonRateThrottle):
@@ -24,8 +25,9 @@ class RegisterRateThrottle(AnonRateThrottle):
     Prevents spam account creation.
     Default: 3 registrations per hour.
     """
-    scope = 'register'
-    rate = '3/hour'
+
+    scope = "register"
+    rate = "3/hour"
 
 
 class PasswordChangeThrottle(UserRateThrottle):
@@ -34,8 +36,9 @@ class PasswordChangeThrottle(UserRateThrottle):
     Prevents abuse of password change functionality.
     Default: 5 attempts per hour for authenticated users.
     """
-    scope = 'password_change'
-    rate = '5/hour'
+
+    scope = "password_change"
+    rate = "5/hour"
 
 
 class ProfileUpdateThrottle(UserRateThrottle):
@@ -44,5 +47,13 @@ class ProfileUpdateThrottle(UserRateThrottle):
     Prevents excessive profile modifications.
     Default: 20 updates per hour.
     """
-    scope = 'profile_update'
-    rate = '20/hour'
+
+    scope = "profile_update"
+    rate = "20/hour"
+
+
+class ChatRateThrottle(UserRateThrottle):
+    """Keep authenticated chat traffic within a predictable provider budget."""
+
+    scope = "chat"
+    rate = "20/min"

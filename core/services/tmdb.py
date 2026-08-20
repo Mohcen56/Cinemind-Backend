@@ -2,6 +2,8 @@ import requests
 from django.conf import settings
 
 BASE_URL = "https://api.themoviedb.org/3"
+REQUEST_TIMEOUT = 8
+
 
 def fetch_movies(query=None, page=1):
     headers = {
@@ -16,9 +18,10 @@ def fetch_movies(query=None, page=1):
         url = f"{BASE_URL}/discover/movie"
         params = {"sort_by": "popularity.desc", "page": page}
 
-    r = requests.get(url, headers=headers, params=params)
+    r = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
+
 
 def trending_movies():
     url = f"{BASE_URL}/trending/movie/week"
@@ -26,9 +29,10 @@ def trending_movies():
         "Authorization": f"Bearer {settings.TMDB_API_KEY}",
         "accept": "application/json",
     }
-    r = requests.get(url, headers=headers)
+    r = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
+
 
 def get_movie_details(movie_id):
     """Get detailed movie info including credits, recommendations, videos, and watch providers"""
@@ -36,14 +40,11 @@ def get_movie_details(movie_id):
         "Authorization": f"Bearer {settings.TMDB_API_KEY}",
         "accept": "application/json",
     }
-    
+
     # Fetch movie details with append_to_response for efficiency
     url = f"{BASE_URL}/movie/{movie_id}"
-    params = {
-        "append_to_response": "credits,recommendations,videos,watch/providers"
-    }
-    
-    r = requests.get(url, headers=headers, params=params)
+    params = {"append_to_response": "credits,recommendations,videos,watch/providers"}
+
+    r = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
-

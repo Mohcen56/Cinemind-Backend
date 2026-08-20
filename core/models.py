@@ -1,5 +1,6 @@
 from django.db import models
 
+
 class TrendingSearch(models.Model):
     search_term = models.CharField(max_length=255)
     movie_id = models.IntegerField()
@@ -10,8 +11,7 @@ class TrendingSearch(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-count', '-updated_at']
+        ordering = ["-count", "-updated_at"]
 
     def __str__(self):
         return f"{self.search_term} (ID: {self.movie_id})"
-
